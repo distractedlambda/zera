@@ -452,6 +452,11 @@ pub const VectorInstr = enum(u32) {
     f64x2_convert_low_i32x4_u,
 };
 
+pub const Vector16ByteImmInstr = enum(u32) {
+    v128_const = 12,
+    i8x16_shuffle,
+};
+
 pub const VectorMemargInstr = enum(u32) {
     v128_load = 0,
     v128_load_8x8_s,
@@ -499,6 +504,13 @@ pub const VectorMemargLaneidxInstr = enum(u32) {
 };
 
 pub const Instr = union(enum) {
+    i32_const: i32,
+    i64_const: i64,
+    f32_const: f32,
+    f64_const: f64,
+    ref_null: RefType,
+    br_table: u32,
+    select_t: u32,
     single_byte: SingleByteInstr,
     block_type: struct { BlockTypeInstr, BlockType },
     idx: struct { IdxInstr, u32 },
@@ -507,47 +519,10 @@ pub const Instr = union(enum) {
     extended_idx: struct { ExtendedIdxInstr, u32 },
     extended_dual_idx: struct { ExtendedDualIdxInstr, u32, u32 },
     vector: VectorInstr,
+    vector_16byte_imm: struct { Vector16ByteImmInstr, *const [16]u8 },
     vector_memarg: struct { VectorMemargInstr, MemArg },
     vector_laneidx: struct { VectorLaneidxInstr, LaneIdx },
     vector_memarg_laneidx: struct { VectorMemargLaneidxInstr, MemArg, LaneIdx },
-
-    br: LabelIdx,
-    br_if: LabelIdx,
-    br_table: void,
-    call: FuncIdx,
-    call_indirect: struct { TypeIdx, TableIdx },
-    ref_null: RefType,
-    ref_is_null: void,
-    ref_func: FuncIdx,
-    drop: void,
-    select: void,
-    select_t: void,
-    local_get: LocalIdx,
-    local_set: LocalIdx,
-    local_tee: LocalIdx,
-    global_get: GlobalIdx,
-    global_set: GlobalIdx,
-    table_get: TableIdx,
-    table_set: TableIdx,
-    table_init: struct { ElemIdx, TableIdx },
-    elem_drop: ElemIdx,
-    table_copy: struct { TableIdx, TableIdx },
-    table_grow: TableIdx,
-    table_size: TableIdx,
-    table_fill: TableIdx,
-    memory_size: void,
-    memory_grow: void,
-    memory_init: DataIdx,
-    data_drop: DataIdx,
-    memory_copy: void,
-    memory_fill: void,
-    i32_const: i32,
-    i64_const: i64,
-    f32_const: f32,
-    f64_const: f64,
-
-    v128_const: i128,
-    i8x16_shuffle: [16]LaneIdx,
 };
 
 pub const NumType = enum(u8) {
@@ -966,6 +941,11 @@ pub const Decoder = struct {
 
     pub fn nextInstr(self: *@This()) !Instr {
         return switch (try self.nextByte()) {
+            0x41 => .{ .i32_const = try self.nextInt(i32) },
+            0x42 => .{ .i64_const = try self.nextInt(i64) },
+            0x43 => .{ .f32_const = try self.nextFloat(f32) },
+            0x44 => .{ .f64_const = try self.nextFloat(f64) },
+
             @enumToInt(SingleByteInstr.@"unreachable")...@enumToInt(SingleByteInstr.nop),
             @enumToInt(SingleByteInstr.@"else"),
             @enumToInt(SingleByteInstr.end),
@@ -1042,6 +1022,13 @@ pub const Decoder = struct {
                 @enumToInt(VectorInstr.i64x2_mul)...@enumToInt(VectorInstr.f64x2_neg),
                 @enumToInt(VectorInstr.f64x2_sqrt)...@enumToInt(VectorInstr.f64x2_convert_low_i32x4_u),
                 => |opcode| .{ .vector = @intToEnum(VectorInstr, opcode) },
+
+                @enumToInt(Vector16ByteImmInstr.v128_const),
+                @enumToInt(Vector16ByteImmInstr.i8x16_shuffle),
+                => |opcode| .{ .vector_16byte_imm = .{
+                    @intToEnum(Vector16ByteImmInstr, opcode),
+                    try self.nextBytes(16),
+                } },
 
                 @enumToInt(VectorMemargInstr.v128_load)...@enumToInt(VectorMemargInstr.v128_store),
                 @enumToInt(VectorMemargInstr.v128_load32_zero)...@enumToInt(VectorMemargInstr.v128_load64_zero),
