@@ -11,19 +11,13 @@ pub const LocalIdx = u32;
 pub const LabelIdx = u32;
 pub const LaneIdx = u8;
 
-pub const SingleByteInstr = enum(u8) {
+pub const SimpleInstruction = enum(u8) {
     @"unreachable" = 0x00,
     nop,
-
     @"else" = 0x05,
-
     end = 0x0b,
-
     @"return" = 0x0f,
-
     drop = 0x1a,
-    select,
-
     i32_eqz = 0x45,
     i32_eq,
     i32_ne,
@@ -152,22 +146,19 @@ pub const SingleByteInstr = enum(u8) {
     i64_extend8_s,
     i64_extend16_s,
     i64_extend32_s,
-
     ref_is_null = 0xd1,
 };
 
-pub const BlockTypeInstr = enum(u8) {
+pub const BlockTypeInstruction = enum(u8) {
     block = 0x02,
     loop,
     @"if",
 };
 
-pub const IdxInstr = enum(u8) {
+pub const IndexInstruction = enum(u8) {
     br = 0x0c,
     br_if,
-
     call = 0x10,
-
     local_get = 0x20,
     local_set,
     local_tee,
@@ -175,14 +166,12 @@ pub const IdxInstr = enum(u8) {
     global_set,
     table_get,
     table_set,
-
     memory_size = 0x3f,
     memory_grow,
-
     ref_func = 0xd2,
 };
 
-pub const MemargInstr = enum(u8) {
+pub const MemoryInstruction = enum(u8) {
     i32_load = 0x28,
     i64_load,
     f32_load,
@@ -208,7 +197,7 @@ pub const MemargInstr = enum(u8) {
     i64_store32,
 };
 
-pub const ExtendedInstr = enum(u32) {
+pub const ExtendedInstruction = enum(u32) {
     i32_trunc_sat_f32_s = 0,
     i32_trunc_sat_f32_u,
     i32_trunc_sat_f64_s,
@@ -219,26 +208,23 @@ pub const ExtendedInstr = enum(u32) {
     i64_trunc_sat_f64_u,
 };
 
-pub const ExtendedIdxInstr = enum(u32) {
+pub const ExtendedIndexInstruction = enum(u32) {
     data_drop = 9,
-
     memory_fill = 11,
-
     elem_drop = 13,
-
     table_grow = 15,
     table_size,
     table_fill,
 };
 
-pub const ExtendedDualIdxInstr = enum(u32) {
+pub const ExtendedDualIndexInstruction = enum(u32) {
     memory_init = 8,
     memory_copy = 10,
     table_init = 12,
     table_copy = 14,
 };
 
-pub const VectorInstr = enum(u32) {
+pub const VectorInstruction = enum(u32) {
     i8x16_swizzle = 14,
     i8x16_splat,
     i16x8_splat,
@@ -246,7 +232,6 @@ pub const VectorInstr = enum(u32) {
     i64x2_splat,
     f32x4_splat,
     f64x2_splat,
-
     i8x16_eq = 35,
     i8x16_ne,
     i8x16_lt_s,
@@ -296,7 +281,6 @@ pub const VectorInstr = enum(u32) {
     v128_xor,
     v128_bitselect,
     v128_any_true,
-
     f32x4_demote_f64x2_zero = 94,
     f64x2_promote_low_f32x4,
     i8x16_abs,
@@ -357,7 +341,6 @@ pub const VectorInstr = enum(u32) {
     i16x8_min_u,
     i16x8_max_s,
     i16x8_max_u,
-
     i16x8_avgr_u = 155,
     i16x8_extmul_low_i8x16_s,
     i16x8_extmul_high_i8x16_s,
@@ -365,10 +348,8 @@ pub const VectorInstr = enum(u32) {
     i16x8_extmul_high_i8x16_u,
     i32x4_abs,
     i32x4_neg,
-
     i32x4_all_true = 163,
     i32x4_bitmask,
-
     i32x4_extend_low_i16x8_s = 167,
     i32x4_extend_high_i16x8_s,
     i32x4_extend_low_i16x8_u,
@@ -377,26 +358,21 @@ pub const VectorInstr = enum(u32) {
     i32x4_shr_s,
     i32x4_shr_u,
     i32x4_add,
-
     i32x4_sub = 177,
-
     i32x4_mul = 181,
     i32x4_min_s,
     i32x4_min_u,
     i32x4_max_s,
     i32x4_max_u,
     i32x4_dot_i16x8_s,
-
     i32x4_extmul_low_i16x8_s = 188,
     i32x4_extmul_high_i16x8_s,
     i32x4_extmul_low_i16x8_u,
     i32x4_extmul_high_i16x8_u,
     i64x2_abs,
     i64x2_neg,
-
     i64x2_all_true = 195,
     i64x2_bitmask,
-
     i64x2_extend_low_i32x4_s = 199,
     i64x2_extend_high_i32x4_s,
     i64x2_extend_low_i32x4_u,
@@ -405,9 +381,7 @@ pub const VectorInstr = enum(u32) {
     i64x2_shr_s,
     i64x2_shr_u,
     i64x2_add,
-
     i64x2_sub = 209,
-
     i64x2_mul = 213,
     i64x2_eq,
     i64x2_ne,
@@ -432,7 +406,6 @@ pub const VectorInstr = enum(u32) {
     f32x4_pmax,
     f64x2_abs,
     f64x2_neg,
-
     f64x2_sqrt = 239,
     f64x2_add,
     f64x2_sub,
@@ -452,12 +425,12 @@ pub const VectorInstr = enum(u32) {
     f64x2_convert_low_i32x4_u,
 };
 
-pub const Vector16ByteImmInstr = enum(u32) {
+pub const Vector16ByteImmediateInstruction = enum(u32) {
     v128_const = 12,
     i8x16_shuffle,
 };
 
-pub const VectorMemargInstr = enum(u32) {
+pub const VectorMemoryInstruction = enum(u32) {
     v128_load = 0,
     v128_load_8x8_s,
     v128_load_8x8_u,
@@ -470,12 +443,11 @@ pub const VectorMemargInstr = enum(u32) {
     v128_load32_splat,
     v128_load64_splat,
     v128_store,
-
     v128_load32_zero = 92,
     v128_load64_zero,
 };
 
-pub const VectorLaneidxInstr = enum(u32) {
+pub const VectorLaneInstruction = enum(u32) {
     i8x16_extract_lane_s = 21,
     i8x16_extract_lane_u,
     i8x16_replace_lane,
@@ -492,7 +464,7 @@ pub const VectorLaneidxInstr = enum(u32) {
     f64x2_replace_lane,
 };
 
-pub const VectorMemargLaneidxInstr = enum(u32) {
+pub const VectorMemoryLaneInstruction = enum(u32) {
     v128_load8_lane = 84,
     v128_load16_lane,
     v128_load32_lane,
@@ -501,28 +473,6 @@ pub const VectorMemargLaneidxInstr = enum(u32) {
     v128_store16_lane,
     v128_store32_lane,
     v128_store64_lane,
-};
-
-pub const Instr = union(enum) {
-    i32_const: i32,
-    i64_const: i64,
-    f32_const: f32,
-    f64_const: f64,
-    ref_null: RefType,
-    br_table: u32,
-    select_t: u32,
-    single_byte: SingleByteInstr,
-    block_type: struct { BlockTypeInstr, BlockType },
-    idx: struct { IdxInstr, u32 },
-    memarg: struct { MemargInstr, MemArg },
-    extended: ExtendedInstr,
-    extended_idx: struct { ExtendedIdxInstr, u32 },
-    extended_dual_idx: struct { ExtendedDualIdxInstr, u32, u32 },
-    vector: VectorInstr,
-    vector_16byte_imm: struct { Vector16ByteImmInstr, *const [16]u8 },
-    vector_memarg: struct { VectorMemargInstr, MemArg },
-    vector_laneidx: struct { VectorLaneidxInstr, LaneIdx },
-    vector_memarg_laneidx: struct { VectorMemargLaneidxInstr, MemArg, LaneIdx },
 };
 
 pub const NumType = enum(u8) {
@@ -939,118 +889,120 @@ pub const Decoder = struct {
         };
     }
 
-    pub fn nextInstr(self: *@This()) !Instr {
+    pub fn nextInstr(self: *@This(), comptime R: type, visitor: anytype) !R {
         return switch (try self.nextByte()) {
-            0x41 => .{ .i32_const = try self.nextInt(i32) },
-            0x42 => .{ .i64_const = try self.nextInt(i64) },
-            0x43 => .{ .f32_const = try self.nextFloat(f32) },
-            0x44 => .{ .f64_const = try self.nextFloat(f64) },
-
-            @enumToInt(SingleByteInstr.@"unreachable")...@enumToInt(SingleByteInstr.nop),
-            @enumToInt(SingleByteInstr.@"else"),
-            @enumToInt(SingleByteInstr.end),
-            @enumToInt(SingleByteInstr.@"return"),
-            @enumToInt(SingleByteInstr.drop)...@enumToInt(SingleByteInstr.select),
-            @enumToInt(SingleByteInstr.i32_eqz)...@enumToInt(SingleByteInstr.i64_extend32_s),
-            @enumToInt(SingleByteInstr.ref_is_null),
-            => |opcode| .{ .single_byte = @intToEnum(SingleByteInstr, opcode) },
-
-            @enumToInt(BlockTypeInstr.block)...@enumToInt(BlockTypeInstr.@"if") => |opcode| .{
-                .block_type = .{
-                    @intToEnum(BlockTypeInstr, opcode),
-                    try self.nextBlockType(),
-                },
+            0x0e => blk: {
+                const len = try self.nextInt(u32);
+                var table_visitor = try visitor.brTableInstruction(len);
+                for (0..len) |i| try table_visitor.case(i, try self.nextInt(u32));
+                break :blk table_visitor.default(try self.nextInt(u32));
             },
 
-            @enumToInt(IdxInstr.br)...@enumToInt(IdxInstr.br_if),
-            @enumToInt(IdxInstr.call),
-            @enumToInt(IdxInstr.local_get)...@enumToInt(IdxInstr.table_set),
-            @enumToInt(IdxInstr.memory_size)...@enumToInt(IdxInstr.memory_grow),
-            @enumToInt(IdxInstr.ref_func),
-            => |opcode| .{ .idx = .{
-                @intToEnum(IdxInstr, opcode),
+            0x1b => visitor.selectInstruction(null),
+
+            0x1c => visitor.selectInstruction(switch (self.nextInt(u32)) {
+                0 => null,
+                1 => try self.nextValType(),
+                else => return error.UnsupportedInstruction,
+            }),
+
+            0x41 => visitor.i32ConstInstruction(try self.nextInt(i32)),
+
+            0x42 => visitor.i64ConstInstruction(try self.nextInt(i64)),
+
+            0x43 => visitor.f32ConstInstruction(try self.nextFloat(f32)),
+
+            0x44 => visitor.f64ConstInstruction(try self.nextFloat(f64)),
+
+            0x00,
+            0x01,
+            0x05,
+            0x0b,
+            0x0f,
+            0x1a,
+            0x1b,
+            0x45...0xc4,
+            0xd1,
+            => |opcode| visitor.simpleInstruction(@intToEnum(SimpleInstruction, opcode)),
+
+            0x02...0x04 => |opcode| visitor.blockTypeInstruction(
+                @intToEnum(BlockTypeInstruction, opcode),
+                try self.nextBlockType(),
+            ),
+
+            0x0c,
+            0x0d,
+            0x10,
+            0x20...0x26,
+            0x3f,
+            0x40,
+            0xd2,
+            => |opcode| visitor.indexInstruction(
+                @intToEnum(IndexInstruction, opcode),
                 try self.nextInt(u32),
-            } },
+            ),
 
-            @enumToInt(MemargInstr.i32_load)...@enumToInt(MemargInstr.i64_store32) => |opcode| .{
-                .memarg = .{
-                    @intToEnum(MemargInstr, opcode),
-                    try self.nextMemArg(),
-                },
-            },
+            0x28...0x3e => |opcode| visitor.memoryInstruction(
+                @intToEnum(MemoryInstruction, opcode),
+                try self.nextMemArg(),
+            ),
 
             0xfc => switch (try self.nextInt(u32)) {
-                @enumToInt(ExtendedInstr.i32_trunc_sat_f32_s)...@enumToInt(ExtendedInstr.i64_trunc_sat_f64_u) => |opcode| .{
-                    .extended = @intToEnum(ExtendedInstr, opcode),
-                },
+                0...7 => |opcode| visitor.extendedInstruction(@intToEnum(ExtendedInstruction, opcode)),
 
-                @enumToInt(ExtendedIdxInstr.data_drop),
-                @enumToInt(ExtendedIdxInstr.memory_fill),
-                @enumToInt(ExtendedIdxInstr.elem_drop),
-                @enumToInt(ExtendedIdxInstr.table_grow)...@enumToInt(ExtendedIdxInstr.table_fill),
-                => |opcode| .{ .extended_idx = .{
-                    @intToEnum(ExtendedIdxInstr, opcode),
+                9, 11, 13, 15...17 => |opcode| visitor.extendedIndexInstruction(
+                    @intToEnum(ExtendedIndexInstruction, opcode),
                     try self.nextInt(u32),
-                } },
+                ),
 
-                @enumToInt(ExtendedDualIdxInstr.memory_init),
-                @enumToInt(ExtendedDualIdxInstr.memory_copy),
-                @enumToInt(ExtendedDualIdxInstr.table_init),
-                @enumToInt(ExtendedDualIdxInstr.table_copy),
-                => |opcode| .{ .extended_dual_idx = .{
-                    @intToEnum(ExtendedDualIdxInstr, opcode),
+                8, 10, 12, 14 => |opcode| visitor.extendedDualIndexInstruction(
+                    @intToEnum(ExtendedDualIndexInstruction, opcode),
                     try self.nextInt(u32),
                     try self.nextInt(u32),
-                } },
+                ),
 
                 else => error.UnsupportedInstruction,
             },
 
             0xfd => switch (try self.nextInt(u32)) {
-                @enumToInt(VectorInstr.i8x16_swizzle)...@enumToInt(VectorInstr.f64x2_splat),
-                @enumToInt(VectorInstr.i8x16_eq)...@enumToInt(VectorInstr.v128_any_true),
-                @enumToInt(VectorInstr.f32x4_demote_f64x2_zero)...@enumToInt(VectorInstr.i16x8_max_u),
-                @enumToInt(VectorInstr.i16x8_avgr_u)...@enumToInt(VectorInstr.i32x4_neg),
-                @enumToInt(VectorInstr.i32x4_all_true)...@enumToInt(VectorInstr.i32x4_bitmask),
-                @enumToInt(VectorInstr.i32x4_extend_low_i16x8_s)...@enumToInt(VectorInstr.i32x4_add),
-                @enumToInt(VectorInstr.i32x4_sub),
-                @enumToInt(VectorInstr.i32x4_mul)...@enumToInt(VectorInstr.i32x4_dot_i16x8_s),
-                @enumToInt(VectorInstr.i32x4_extmul_low_i16x8_s)...@enumToInt(VectorInstr.i64x2_neg),
-                @enumToInt(VectorInstr.i64x2_all_true)...@enumToInt(VectorInstr.i64x2_bitmask),
-                @enumToInt(VectorInstr.i64x2_extend_low_i32x4_s)...@enumToInt(VectorInstr.i64x2_add),
-                @enumToInt(VectorInstr.i64x2_sub),
-                @enumToInt(VectorInstr.i64x2_mul)...@enumToInt(VectorInstr.f64x2_neg),
-                @enumToInt(VectorInstr.f64x2_sqrt)...@enumToInt(VectorInstr.f64x2_convert_low_i32x4_u),
-                => |opcode| .{ .vector = @intToEnum(VectorInstr, opcode) },
+                14...20,
+                35...64,
+                94...153,
+                155...161,
+                163,
+                164,
+                167...174,
+                177,
+                181...186,
+                188...193,
+                195,
+                196,
+                199...206,
+                209,
+                213...237,
+                239...255,
+                => |opcode| visitor.vectorInstruction(@intToEnum(VectorInstruction, opcode)),
 
-                @enumToInt(Vector16ByteImmInstr.v128_const),
-                @enumToInt(Vector16ByteImmInstr.i8x16_shuffle),
-                => |opcode| .{ .vector_16byte_imm = .{
-                    @intToEnum(Vector16ByteImmInstr, opcode),
+                12, 13 => |opcode| visitor.vector16ByteImmediateInstruction(
+                    @intToEnum(Vector16ByteImmediateInstruction, opcode),
                     try self.nextBytes(16),
-                } },
+                ),
 
-                @enumToInt(VectorMemargInstr.v128_load)...@enumToInt(VectorMemargInstr.v128_store),
-                @enumToInt(VectorMemargInstr.v128_load32_zero)...@enumToInt(VectorMemargInstr.v128_load64_zero),
-                => |opcode| .{ .vector_memarg = .{
-                    @intToEnum(VectorMemargInstr, opcode),
+                0...11, 92, 93 => |opcode| visitor.vectorMemoryInstruction(
+                    @intToEnum(VectorMemoryInstruction, opcode),
                     try self.nextMemArg(),
-                } },
+                ),
 
-                @enumToInt(VectorLaneidxInstr.i8x16_extract_lane_s)...@enumToInt(VectorLaneidxInstr.f64x2_replace_lane) => |opcode| .{
-                    .vector_laneidx = .{
-                        @intToEnum(VectorLaneidxInstr, opcode),
-                        try self.nextByte(),
-                    },
-                },
+                21...34 => |opcode| visitor.vectorLaneInstruction(
+                    @intToEnum(VectorLaneInstruction, opcode),
+                    try self.nextByte(),
+                ),
 
-                @enumToInt(VectorMemargLaneidxInstr.v128_load8_lane)...@enumToInt(VectorMemargLaneidxInstr.v128_store64_lane) => |opcode| .{
-                    .vector_memarg_laneidx = .{
-                        @intToEnum(VectorMemargLaneidxInstr, opcode),
-                        try self.nextMemArg(),
-                        try self.nextByte(),
-                    },
-                },
+                84...91 => |opcode| visitor.vectorMemoryLaneInstruction(
+                    @intToEnum(VectorMemoryLaneInstruction, opcode),
+                    try self.nextMemArg(),
+                    try self.nextByte(),
+                ),
 
                 else => error.UnsupportedInstruction,
             },
