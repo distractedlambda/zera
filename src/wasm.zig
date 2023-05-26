@@ -1,15 +1,15 @@
 const std = @import("std");
 
-pub const TypeIdx = u32;
-pub const FuncIdx = u32;
-pub const TableIdx = u32;
-pub const MemIdx = u32;
-pub const GlobalIdx = u32;
-pub const ElemIdx = u32;
-pub const DataIdx = u32;
-pub const LocalIdx = u32;
-pub const LabelIdx = u32;
-pub const LaneIdx = u8;
+pub const TypeIndex = u32;
+pub const FunctionIndex = u32;
+pub const TableIndex = u32;
+pub const MemoryIndex = u32;
+pub const GlobalIndex = u32;
+pub const ElementSegmentIndex = u32;
+pub const DataSegmentIndex = u32;
+pub const LocalIndex = u32;
+pub const LabelIndex = u32;
+pub const LaneIndex = u8;
 
 pub const SimpleInstruction = enum(u8) {
     @"unreachable" = 0x00,
@@ -475,23 +475,23 @@ pub const VectorMemoryLaneInstruction = enum(u32) {
     v128_store64_lane,
 };
 
-pub const NumType = enum(u8) {
+pub const NumericType = enum(u8) {
     i32 = 0x7f,
     i64 = 0x7e,
     f32 = 0x7d,
     f64 = 0x7c,
 };
 
-pub const VecType = enum(u8) {
+pub const VectorType = enum(u8) {
     v128 = 0x7b,
 };
 
-pub const RefType = enum(u8) {
+pub const ReferenceType = enum(u8) {
     funcref = 0x70,
     externref = 0x6f,
 };
 
-pub const ValType = enum(u8) {
+pub const ValueType = enum(u8) {
     i32 = 0x7f,
     i64 = 0x7e,
     f32 = 0x7d,
@@ -501,9 +501,9 @@ pub const ValType = enum(u8) {
     externref = 0x6f,
 };
 
-pub const ResultType = []const ValType;
+pub const ResultType = []const ValueType;
 
-pub const FuncType = struct {
+pub const FunctionType = struct {
     parameters: ResultType,
     results: ResultType,
 };
@@ -513,26 +513,26 @@ pub const Limits = struct {
     max: ?u32 = null,
 };
 
-pub const MemType = struct {
+pub const MemoryType = struct {
     limits: Limits,
 };
 
 pub const TableType = struct {
-    element_type: RefType,
+    element_type: ReferenceType,
     limits: Limits,
 };
 
-pub const Mut = enum(u8) {
+pub const Mutability = enum(u8) {
     @"const" = 0x00,
     @"var" = 0x01,
 };
 
 pub const GlobalType = struct {
-    value_type: ValType,
-    mut: Mut,
+    value_type: ValueType,
+    mutability: Mutability,
 };
 
-pub const MemArg = struct {
+pub const MemoryArgument = struct {
     alignment: u32,
     offset: u32,
 };
@@ -540,9 +540,9 @@ pub const MemArg = struct {
 pub const Name = []const u8;
 
 pub const ImportDesc = union(enum) {
-    func: FuncIdx,
+    function: FunctionIndex,
     table: TableType,
-    mem: MemType,
+    memory: MemoryType,
     global: GlobalType,
 };
 
@@ -552,31 +552,31 @@ pub const Import = struct {
     desc: ImportDesc,
 };
 
-pub const ConstantExpr = union(enum) {
+pub const ConstantExpression = union(enum) {
     i32_const: i32,
     i64_const: i64,
     f32_const: f32,
     f64_const: f64,
     ref_null: void,
-    ref_func: FuncIdx,
-    global_get: GlobalIdx,
+    ref_func: FunctionIndex,
+    global_get: GlobalIndex,
 };
 
 pub const BlockType = union(enum) {
-    immediate: ?ValType,
-    indexed: FuncIdx,
+    immediate: ?ValueType,
+    indexed: FunctionIndex,
 };
 
 pub const Global = struct {
     type: GlobalType,
-    initial_value: ConstantExpr,
+    initial_value: ConstantExpression,
 };
 
 pub const ExportDesc = union(enum) {
-    func: FuncIdx,
-    table: TableIdx,
-    mem: MemIdx,
-    global: GlobalIdx,
+    func: FunctionIndex,
+    table: TableIndex,
+    mem: MemoryIndex,
+    global: GlobalIndex,
 };
 
 pub const Export = struct {
@@ -584,7 +584,7 @@ pub const Export = struct {
     desc: ExportDesc,
 };
 
-pub const ElemKind = enum(u8) {
+pub const ElementSegmentKind = enum(u8) {
     funcref = 0x00,
 };
 
@@ -602,37 +602,6 @@ pub const SectionId = enum(u8) {
     code,
     data,
     data_count,
-};
-
-pub const Section = struct {
-    id: SectionId,
-    data: []const u8,
-};
-
-pub const SectionIterator = struct {
-    decoder: Decoder,
-
-    pub fn init(module_data: []const u8) !@This() {
-        var decoder = Decoder.init(module_data);
-
-        const magic = try decoder.nextBytes(4);
-        if (!std.meta.eql(magic.*, [_]u8{ 0x00, 0x61, 0x73, 0x6d }))
-            return error.NotABinaryWasmModule;
-
-        const version = try decoder.nextBytes(4);
-        if (!std.meta.eql(version.*, [_]u8{ 0x01, 0x00, 0x00, 0x00 }))
-            return error.UnsupportedBinaryFormatVersion;
-
-        return .{ .decoder = decoder };
-    }
-
-    pub fn next(self: *@This()) !?Section {
-        if (self.decoder.atEnd()) return null;
-        const id = try self.decoder.nextSectionId();
-        const size = try self.decoder.nextInt(u32);
-        const data = try self.decoder.nextBytes(size);
-        return Section{ .id = id, .data = data };
-    }
 };
 
 pub const Decoder = struct {
@@ -717,23 +686,23 @@ pub const Decoder = struct {
         return try self.nextBytes(try self.nextInt(u32));
     }
 
-    pub fn nextNumType(self: *@This()) !NumType {
-        return std.meta.intToEnum(NumType, try self.nextByte()) catch
+    pub fn nextNumericType(self: *@This()) !NumericType {
+        return std.meta.intToEnum(NumericType, try self.nextByte()) catch
             error.UnsupportedNumberType;
     }
 
-    pub fn nextVecType(self: *@This()) !VecType {
-        return std.meta.intToEnum(VecType, try self.nextByte()) catch
+    pub fn nextVectorType(self: *@This()) !VectorType {
+        return std.meta.intToEnum(VectorType, try self.nextByte()) catch
             error.UnsupportedVectorType;
     }
 
-    pub fn nextRefType(self: *@This()) !RefType {
-        return std.meta.intToEnum(RefType, try self.nextByte()) catch
+    pub fn nextReferenceType(self: *@This()) !ReferenceType {
+        return std.meta.intToEnum(ReferenceType, try self.nextByte()) catch
             error.UnsupportedReferenceType;
     }
 
-    pub fn nextValType(self: *@This()) !ValType {
-        return std.meta.intToEnum(ValType, try self.nextByte()) catch
+    pub fn nextValueType(self: *@This()) !ValueType {
+        return std.meta.intToEnum(ValueType, try self.nextByte()) catch
             error.UnsupportedValueType;
     }
 
@@ -742,13 +711,13 @@ pub const Decoder = struct {
         const types = try self.nextBytes(len);
 
         for (types) |t|
-            _ = std.meta.intToEnum(ValType, t) catch
+            _ = std.meta.intToEnum(ValueType, t) catch
                 return error.UnsupportedValueType;
 
-        return std.mem.bytesAsSlice(ValType, types);
+        return std.mem.bytesAsSlice(ValueType, types);
     }
 
-    pub fn nextFuncType(self: *@This()) !FuncType {
+    pub fn nextFunctionType(self: *@This()) !FunctionType {
         if (try self.nextByte() != 0x60)
             return error.UnsupportedFunctionType;
 
@@ -766,31 +735,31 @@ pub const Decoder = struct {
         };
     }
 
-    pub fn nextMemType(self: *@This()) !MemType {
+    pub fn nextMemoryType(self: *@This()) !MemoryType {
         return .{ .limits = try self.nextLimits() };
     }
 
     pub fn nextTableType(self: *@This()) !TableType {
         return .{
-            .element_type = try self.nextRefType(),
+            .element_type = try self.nextReferenceType(),
             .limits = try self.nextLimits(),
         };
     }
 
-    pub fn nextMut(self: *@This()) !Mut {
-        return std.meta.intToEnum(Mut, try self.nextByte()) catch
+    pub fn nextMutability(self: *@This()) !Mutability {
+        return std.meta.intToEnum(Mutability, try self.nextByte()) catch
             error.UnsupportedMutability;
     }
 
-    pub fn nextElemKind(self: *@This()) !ElemKind {
-        return std.meta.intToEnum(ElemKind, try self.nextByte()) catch
+    pub fn nextElementSegmentKind(self: *@This()) !ElementSegmentKind {
+        return std.meta.intToEnum(ElementSegmentKind, try self.nextByte()) catch
             error.UnsupportedElemKind;
     }
 
     pub fn nextGlobalType(self: *@This()) !GlobalType {
         return .{
-            .value_type = try self.nextValType(),
-            .mut = try self.nextMut(),
+            .value_type = try self.nextValueType(),
+            .mut = try self.nextMutability(),
         };
     }
 
@@ -806,18 +775,18 @@ pub const Decoder = struct {
 
             0x6f, 0x70, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f => |value_type| blk: {
                 self.data = self.data[1..];
-                break :blk .{ .immediate = @intToEnum(ValType, value_type) };
+                break :blk .{ .immediate = @intToEnum(ValueType, value_type) };
             },
 
             else => blk: {
                 const index = try self.nextInt(i33);
                 if (index < 0) return error.UnsupportedBlockType;
-                break :blk .{ .indexed = @intCast(FuncIdx, index) };
+                break :blk .{ .indexed = @intCast(FunctionIndex, index) };
             },
         };
     }
 
-    pub fn nextMemArg(self: *@This()) !MemArg {
+    pub fn nextMemoryArgument(self: *@This()) !MemoryArgument {
         return .{
             .alignment = try self.nextInt(u32),
             .offset = try self.nextInt(u32),
@@ -831,9 +800,9 @@ pub const Decoder = struct {
 
     pub fn nextImportDesc(self: *@This()) !ImportDesc {
         return switch (try self.nextByte()) {
-            0x00 => .{ .func = try self.nextInt(FuncIdx) },
+            0x00 => .{ .func = try self.nextInt(FunctionIndex) },
             0x01 => .{ .table = try self.nextTableType() },
-            0x02 => .{ .mem = try self.nextMemType() },
+            0x02 => .{ .mem = try self.nextMemoryType() },
             0x03 => .{ .global = try self.nextGlobalType() },
             else => error.UnsupportedImportDesc,
         };
@@ -847,15 +816,15 @@ pub const Decoder = struct {
         };
     }
 
-    pub fn nextConstantExpr(self: *@This()) !ConstantExpr {
-        const value: ConstantExpr = switch (try self.nextByte()) {
-            0x23 => .{ .global_get = try self.nextInt(GlobalIdx) },
+    pub fn nextConstantExpression(self: *@This()) !ConstantExpression {
+        const value: ConstantExpression = switch (try self.nextByte()) {
+            0x23 => .{ .global_get = try self.nextInt(GlobalIndex) },
             0x41 => .{ .i32_const = try self.nextInt(i32) },
             0x42 => .{ .i64_const = try self.nextInt(i64) },
             0x43 => .{ .f32_const = try self.nextFloat(f32) },
             0x44 => .{ .f64_const = try self.nextFloat(f64) },
             0xd0 => .ref_null,
-            0xd2 => .{ .ref_func = try self.nextInt(FuncIdx) },
+            0xd2 => .{ .ref_func = try self.nextInt(FunctionIndex) },
             else => return error.UnsupportedConstantExpression,
         };
 
@@ -868,16 +837,16 @@ pub const Decoder = struct {
     pub fn nextGlobal(self: *@This()) !Global {
         return .{
             .type = try self.nextGlobalType(),
-            .initial_value = try self.nextConstantExpr(),
+            .initial_value = try self.nextConstantExpression(),
         };
     }
 
     pub fn nextExportDesc(self: *@This()) !ExportDesc {
         return switch (try self.nextByte()) {
-            0x00 => .{ .func = try self.nextInt(FuncIdx) },
-            0x01 => .{ .table = try self.nextInt(TableIdx) },
-            0x02 => .{ .mem = try self.nextInt(MemIdx) },
-            0x03 => .{ .global = try self.nextInt(GlobalIdx) },
+            0x00 => .{ .func = try self.nextInt(FunctionIndex) },
+            0x01 => .{ .table = try self.nextInt(TableIndex) },
+            0x02 => .{ .mem = try self.nextInt(MemoryIndex) },
+            0x03 => .{ .global = try self.nextInt(GlobalIndex) },
             else => error.UnsupportedExportDesc,
         };
     }
@@ -889,30 +858,30 @@ pub const Decoder = struct {
         };
     }
 
-    pub fn nextInstr(self: *@This(), comptime R: type, visitor: anytype) !R {
+    pub fn nextInstruction(self: *@This(), comptime R: type, visitor: anytype) !R {
         return switch (try self.nextByte()) {
             0x0e => blk: {
                 const len = try self.nextInt(u32);
-                var table_visitor = try visitor.brTableInstruction(len);
-                for (0..len) |i| try table_visitor.case(i, try self.nextInt(u32));
-                break :blk table_visitor.default(try self.nextInt(u32));
+                var table_visitor = try visitor.visitBrTable(len);
+                for (0..len) |i| try table_visitor.visitCase(i, try self.nextInt(u32));
+                break :blk table_visitor.visitDefault(try self.nextInt(u32));
             },
 
-            0x1b => visitor.selectInstruction(null),
+            0x1b => visitor.visitSelect(null),
 
-            0x1c => visitor.selectInstruction(switch (self.nextInt(u32)) {
+            0x1c => visitor.visitSelect(switch (self.nextInt(u32)) {
                 0 => null,
-                1 => try self.nextValType(),
+                1 => try self.nextValueType(),
                 else => return error.UnsupportedInstruction,
             }),
 
-            0x41 => visitor.i32ConstInstruction(try self.nextInt(i32)),
+            0x41 => visitor.visitI32Const(try self.nextInt(i32)),
 
-            0x42 => visitor.i64ConstInstruction(try self.nextInt(i64)),
+            0x42 => visitor.visitI64Const(try self.nextInt(i64)),
 
-            0x43 => visitor.f32ConstInstruction(try self.nextFloat(f32)),
+            0x43 => visitor.visitF32Const(try self.nextFloat(f32)),
 
-            0x44 => visitor.f64ConstInstruction(try self.nextFloat(f64)),
+            0x44 => visitor.visitF64Const(try self.nextFloat(f64)),
 
             0x00,
             0x01,
@@ -923,9 +892,9 @@ pub const Decoder = struct {
             0x1b,
             0x45...0xc4,
             0xd1,
-            => |opcode| visitor.simpleInstruction(@intToEnum(SimpleInstruction, opcode)),
+            => |opcode| visitor.visitSimpleInstruction(@intToEnum(SimpleInstruction, opcode)),
 
-            0x02...0x04 => |opcode| visitor.blockTypeInstruction(
+            0x02...0x04 => |opcode| visitor.visitBlockTypeInstruction(
                 @intToEnum(BlockTypeInstruction, opcode),
                 try self.nextBlockType(),
             ),
@@ -937,25 +906,25 @@ pub const Decoder = struct {
             0x3f,
             0x40,
             0xd2,
-            => |opcode| visitor.indexInstruction(
+            => |opcode| visitor.visitIndexInstruction(
                 @intToEnum(IndexInstruction, opcode),
                 try self.nextInt(u32),
             ),
 
-            0x28...0x3e => |opcode| visitor.memoryInstruction(
+            0x28...0x3e => |opcode| visitor.visitMemoryInstruction(
                 @intToEnum(MemoryInstruction, opcode),
-                try self.nextMemArg(),
+                try self.nextMemoryArgument(),
             ),
 
             0xfc => switch (try self.nextInt(u32)) {
                 0...7 => |opcode| visitor.extendedInstruction(@intToEnum(ExtendedInstruction, opcode)),
 
-                9, 11, 13, 15...17 => |opcode| visitor.extendedIndexInstruction(
+                9, 11, 13, 15...17 => |opcode| visitor.visitExtendedIndexInstruction(
                     @intToEnum(ExtendedIndexInstruction, opcode),
                     try self.nextInt(u32),
                 ),
 
-                8, 10, 12, 14 => |opcode| visitor.extendedDualIndexInstruction(
+                8, 10, 12, 14 => |opcode| visitor.visitExtendedDualIndexInstruction(
                     @intToEnum(ExtendedDualIndexInstruction, opcode),
                     try self.nextInt(u32),
                     try self.nextInt(u32),
@@ -981,26 +950,26 @@ pub const Decoder = struct {
                 209,
                 213...237,
                 239...255,
-                => |opcode| visitor.vectorInstruction(@intToEnum(VectorInstruction, opcode)),
+                => |opcode| visitor.visitVectorInstruction(@intToEnum(VectorInstruction, opcode)),
 
-                12, 13 => |opcode| visitor.vector16ByteImmediateInstruction(
+                12, 13 => |opcode| visitor.visitVector16ByteImmediateInstruction(
                     @intToEnum(Vector16ByteImmediateInstruction, opcode),
                     try self.nextBytes(16),
                 ),
 
-                0...11, 92, 93 => |opcode| visitor.vectorMemoryInstruction(
+                0...11, 92, 93 => |opcode| visitor.visitVectorMemoryInstruction(
                     @intToEnum(VectorMemoryInstruction, opcode),
-                    try self.nextMemArg(),
+                    try self.nextMemoryArgument(),
                 ),
 
-                21...34 => |opcode| visitor.vectorLaneInstruction(
+                21...34 => |opcode| visitor.visitVectorLaneInstruction(
                     @intToEnum(VectorLaneInstruction, opcode),
                     try self.nextByte(),
                 ),
 
-                84...91 => |opcode| visitor.vectorMemoryLaneInstruction(
+                84...91 => |opcode| visitor.visitVectorMemoryLaneInstruction(
                     @intToEnum(VectorMemoryLaneInstruction, opcode),
-                    try self.nextMemArg(),
+                    try self.nextMemoryArgument(),
                     try self.nextByte(),
                 ),
 
