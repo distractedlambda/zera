@@ -1,6 +1,8 @@
 const std = @import("std");
 const wasm = @import("wasm.zig");
 
+const ir = @import("arm64/ir.zig");
+
 const ModuleCompiler = struct {
     allocator: std.mem.Allocator,
 
@@ -13,14 +15,26 @@ const ModuleCompiler = struct {
     exports: std.ArrayListUnmanaged(wasm.Export) = .{},
     start: ?wasm.FuncIdx = null,
 
+    function_arena: std.heap.ArenaAllocator,
+    operand_stack: std.ArrayListUnmanaged(Operand) = .{},
+    label_stack: std.ArrayListUnmanaged(Label) = .{},
+    locals: std.ArrayListUnmanaged(Local) = .{},
+
     fn init(allocator: std.mem.Allocator) @This() {
-        return .{ .allocator = allocator };
+        return .{
+            .allocator = allocator,
+            .function_arena = std.heap.ArenaAllocator.init(allocator),
+        };
     }
 
-    fn resetFunction(self: *@This()) void {}
+    fn resetFunction(self: *@This()) void {
+        _ = self.function_arena.reset(.retain_capacity);
+        self.operand_stack.clearRetainingCapacity();
+        self.label_stack.clearRetainingCapacity();
+        self.locals.clearRetainingCapacity();
+    }
 
     fn reset(self: *@This()) void {
-        self.resetFunction();
         self.types.clearRetainingCapacity();
         self.imports.clearRetainingCapacity();
         self.functions.clearRetainingCapacity();
@@ -28,6 +42,8 @@ const ModuleCompiler = struct {
         self.memories.clearRetainingCapacity();
         self.globals.clearRetainingCapacity();
         self.exports.clearRetainingCapacity();
+
+        self.resetFunction();
     }
 
     fn deinit(self: *@This()) void {
@@ -38,7 +54,29 @@ const ModuleCompiler = struct {
         self.memories.deinit(self.allocator);
         self.globals.deinit(self.allocator);
         self.exports.deinit(self.allocator);
+
+        self.function_arena.deinit();
+        self.operand_stack.deinit(self.allocator);
+        self.label_stack.deinit(self.allocator);
+        self.locals.deinit(self.allocator);
     }
+
+    fn functionAllocator(self: *@This()) std.mem.Allocator {
+        return self.function_arena.allocator();
+    }
+};
+
+const Operand = struct {
+    value: *ir.Instruction,
+    type: wasm.ValueType,
+};
+
+const Label = struct {
+    block: *ir.Block,
+};
+
+const Local = struct {
+    value: *ir.Instruction,
 };
 
 const Function = struct {
