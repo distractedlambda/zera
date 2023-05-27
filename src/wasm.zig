@@ -894,7 +894,6 @@ pub const Decoder = struct {
             0x0b,
             0x0f,
             0x1a,
-            0x1b,
             0x45...0xc4,
             0xd1,
             => |opcode| {
@@ -1090,8 +1089,13 @@ pub const Decoder = struct {
             },
 
             10 => {
-                if (section_order_bookmark.* > 10) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 10;
+                if (section_order_bookmark.* > 10)
+                    return error.UnsupportedSectionOrder;
+
+                if (section_order_bookmark.* < 10) {
+                    section_order_bookmark.* = 10;
+                    try visitor.visitBeforeFirstCodeSection();
+                }
 
                 const num_codes = try contents_decoder.nextInt(u32);
                 const code_visitor = try visitor.visitCodeSection(num_codes);

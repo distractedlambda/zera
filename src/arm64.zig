@@ -11,14 +11,14 @@ pub const ModuleCompiler = struct {
     imported_tables: std.ArrayListUnmanaged(ImportedTable) = .{},
     imported_memories: std.ArrayListUnmanaged(ImportedMemory) = .{},
     imported_globals: std.ArrayListUnmanaged(ImportedGlobal) = .{},
-    defined_functions: std.ArrayListUnmanaged(wasm.TypeIndex) = .{},
-    defined_tables: std.ArrayListUnmanaged(wasm.TableType) = .{},
-    defined_memories: std.ArrayListUnmanaged(wasm.MemoryType) = .{},
-    defined_globals: std.ArrayListUnmanaged(wasm.Global) = .{},
+    defined_functions: std.ArrayListUnmanaged(DefinedFunction) = .{},
+    defined_tables: std.ArrayListUnmanaged(DefinedTable) = .{},
+    defined_memories: std.ArrayListUnmanaged(DefinedMemory) = .{},
+    defined_globals: std.ArrayListUnmanaged(DefinedGlobal) = .{},
     exports: std.ArrayListUnmanaged(wasm.Export) = .{},
     start: ?wasm.FunctionIndex = null,
     data_count: ?u32 = null,
-
+    store_size: usize = undefined,
     current_function: wasm.FunctionIndex = 0,
 
     node_arena: std.heap.ArenaAllocator,
@@ -52,6 +52,7 @@ pub const ModuleCompiler = struct {
         self.exports.clearRetainingCapacity();
         self.start = null;
         self.data_count = null;
+        self.store_size = undefined;
         self.current_function = 0;
     }
 
@@ -132,7 +133,7 @@ pub const ModuleCompiler = struct {
     }
 
     pub fn visitFunction(self: *@This(), _: usize, typ: wasm.TypeIndex) !void {
-        self.defined_functions.appendAssumeCapacity(typ);
+        self.defined_functions.appendAssumeCapacity(.{ .type = typ });
     }
 
     pub fn visitTableSection(self: *@This(), len: usize) !*@This() {
@@ -141,7 +142,7 @@ pub const ModuleCompiler = struct {
     }
 
     pub fn visitTable(self: *@This(), _: usize, typ: wasm.TableType) !void {
-        self.defined_tables.appendAssumeCapacity(typ);
+        self.defined_tables.appendAssumeCapacity(.{ .type = typ });
     }
 
     pub fn visitMemorySection(self: *@This(), len: usize) !*@This() {
@@ -150,7 +151,7 @@ pub const ModuleCompiler = struct {
     }
 
     pub fn visitMemory(self: *@This(), _: usize, typ: wasm.MemoryType) !void {
-        self.defined_memories.appendAssumeCapacity(typ);
+        self.defined_memories.appendAssumeCapacity(.{ .type = typ });
     }
 
     pub fn visitGlobalSection(self: *@This(), len: usize) !*@This() {
@@ -159,7 +160,7 @@ pub const ModuleCompiler = struct {
     }
 
     pub fn visitGlobal(self: *@This(), _: usize, global: wasm.Global) !void {
-        self.defined_globals.appendAssumeCapacity(global);
+        self.defined_globals.appendAssumeCapacity(.{ .wasm = global });
     }
 
     pub fn visitExportSection(self: *@This(), len: usize) !*@This() {
@@ -175,15 +176,91 @@ pub const ModuleCompiler = struct {
         self.start = start;
     }
 
+    fn alignOffset(offset: usize, comptime alignment: usize) !usize {
+        const misalignment = offset % alignment;
+        if (misalignment == 0) return offset;
+        return std.math.add(usize, offset, alignment - misalignment);
+    }
+
+    pub fn visitBeforeFirstCodeSection(self: *@This()) !void {
+        var offset: usize = 0;
+
+        for (self.defined_memories.items) |*memory| {
+            offset = try alignOffset(offset, @alignOf(Memory));
+            memory.offset = offset;
+            offset = try std.math.add(usize, offset, @sizeOf(Memory));
+        }
+
+        for (self.imported_memories.items) |*memory| {
+            offset = try alignOffset(offset, @alignOf(*Memory));
+            memory.ptr_offset = offset;
+            offset = try std.math.add(usize, offset, @sizeOf(*Memory));
+        }
+
+        for (self.defined_tables.items) |*table| {
+            offset = try alignOffset(offset, @alignOf(Table));
+            table.offset = offset;
+            offset = try std.math.add(usize, offset, @sizeOf(Table));
+        }
+
+        for (self.imported_tables.items) |*table| {
+            offset = try alignOffset(offset, @alignOf(*Table));
+            table.ptr_offset = offset;
+            offset = try std.math.add(usize, offset, @sizeOf(*Table));
+        }
+
+        for (self.defined_globals.items) |*global| {
+            if (global.wasm.type.mutability == .@"const" and global.wasm.initial_value != .global_get)
+                // The global will be constant-folded, so don't bother allocating space for it
+                continue;
+
+            switch (global.wasm.type.value_type) {
+                .i32, .f32, .funcref => {
+                    offset = try alignOffset(offset, 4);
+                    global.offset = offset;
+                    offset = try std.math.add(usize, offset, 4);
+                },
+
+                .i64, .f64 => {
+                    offset = try alignOffset(offset, 8);
+                    global.offset = offset;
+                    offset = try std.math.add(usize, offset, 8);
+                },
+
+                .v128 => {
+                    offset = try alignOffset(offset, 16);
+                    global.offset = offset;
+                    offset = try std.math.add(usize, offset, 16);
+                },
+
+                .externref => @panic("TODO add externref support"),
+            }
+        }
+
+        for (self.imported_globals.items) |*global| {
+            offset = try alignOffset(offset, @alignOf(*anyopaque));
+            global.ptr_offset = offset;
+            offset = try std.math.add(usize, offset, @sizeOf(*anyopaque));
+        }
+
+        for (self.imported_functions.items) |*function| {
+            offset = try alignOffset(offset, @alignOf(ImportedFunctionVTable));
+            function.vtable_offset = offset;
+            offset = try std.math.add(usize, offset, @sizeOf(ImportedFunctionVTable));
+        }
+
+        self.store_size = offset;
+    }
+
     pub fn visitCodeSection(self: *@This(), _: usize) !*@This() {
         return self;
     }
 
     pub fn visitFunctionCode(self: *@This(), _: usize) !*@This() {
-        if (self.current_function >= self.functions.items.len)
+        if (self.current_function >= self.defined_functions.items.len)
             return error.UndeclaredFunction;
 
-        _ = self.node_arena.reset(self.allocator, .retain_capacity);
+        _ = self.node_arena.reset(.retain_capacity);
 
         self.operand_stack.clearRetainingCapacity();
         self.label_stack.clearRetainingCapacity();
@@ -194,8 +271,6 @@ pub const ModuleCompiler = struct {
         self.f32_zero = try self.newNode(ir.F32Const{ .value = 0 });
         self.f64_zero = try self.newNode(ir.F64Const{ .value = 0 });
         self.v128_zero = try self.newNode(ir.V128Const{ .value = 0 });
-        self.funcref_null = try self.newNode(ir.Instruction.init(.funcref_null));
-        self.externref_null = try self.newNode(ir.Instruction.init(.externref_null));
         self.current_block = try self.newNode(ir.Block{});
 
         return self;
@@ -203,11 +278,11 @@ pub const ModuleCompiler = struct {
 
     pub fn visitLocals(self: *@This(), count: u32, typ: wasm.ValueType) !void {
         const fill = switch (typ) {
-            .i32, .funcref => self.i32_zero,
-            .i64 => self.i64_zero,
-            .f32 => self.f32_zero,
-            .f64 => self.f64_zero,
-            .v128 => self.v128_zero,
+            .i32, .funcref => &self.i32_zero.base,
+            .i64 => &self.i64_zero.base,
+            .f32 => &self.f32_zero.base,
+            .f64 => &self.f64_zero.base,
+            .v128 => &self.v128_zero.base,
             .externref => @panic("TODO implement externref support"),
         };
 
@@ -343,9 +418,18 @@ const ImportedFunction = struct {
     vtable_offset: usize = undefined,
 };
 
+const DefinedFunction = struct {
+    type: wasm.TypeIndex,
+};
+
 const ImportedTable = struct {
     wasm: wasm.ImportedTable,
     ptr_offset: usize = undefined,
+};
+
+const DefinedTable = struct {
+    type: wasm.TableType,
+    offset: usize = undefined,
 };
 
 const ImportedMemory = struct {
@@ -353,9 +437,19 @@ const ImportedMemory = struct {
     ptr_offset: usize = undefined,
 };
 
+const DefinedMemory = struct {
+    type: wasm.MemoryType,
+    offset: usize = undefined,
+};
+
 const ImportedGlobal = struct {
     wasm: wasm.ImportedGlobal,
     ptr_offset: usize = undefined,
+};
+
+const DefinedGlobal = struct {
+    wasm: wasm.Global,
+    offset: usize = undefined,
 };
 
 const ImportedFunctionVTable = extern struct {
