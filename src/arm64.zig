@@ -114,52 +114,52 @@ pub const ModuleCompiler = struct {
         try self.imported_functions.append(self.allocator, .{ .wasm = func });
     }
 
-    pub fn visitImportedTable(self: *@This(), func: wasm.ImportedTable) !void {
-        try self.imported_tables.append(self.allocator, .{ .wasm = func });
+    pub fn visitImportedTable(self: *@This(), table: wasm.ImportedTable) !void {
+        try self.imported_tables.append(self.allocator, .{ .wasm = table });
     }
 
-    pub fn visitImportedMemory(self: *@This(), func: wasm.ImportedMemory) !void {
-        try self.imported_memories.append(self.allocator, .{ .wasm = func });
+    pub fn visitImportedMemory(self: *@This(), memory: wasm.ImportedMemory) !void {
+        try self.imported_memories.append(self.allocator, .{ .wasm = memory });
     }
 
-    pub fn visitImportedGlobal(self: *@This(), func: wasm.ImportedGlobal) !void {
-        try self.imported_globals.append(self.allocator, .{ .wasm = func });
+    pub fn visitImportedGlobal(self: *@This(), global: wasm.ImportedGlobal) !void {
+        try self.imported_globals.append(self.allocator, .{ .wasm = global });
     }
 
     pub fn visitFunctionSection(self: *@This(), len: usize) !*@This() {
-        try self.functions.ensureUnusedCapacity(self.allocator, len);
+        try self.defined_functions.ensureUnusedCapacity(self.allocator, len);
         return self;
     }
 
     pub fn visitFunction(self: *@This(), _: usize, typ: wasm.TypeIndex) !void {
-        self.functions.appendAssumeCapacity(typ);
+        self.defined_functions.appendAssumeCapacity(typ);
     }
 
     pub fn visitTableSection(self: *@This(), len: usize) !*@This() {
-        try self.tables.ensureUnusedCapacity(self.allocator, len);
+        try self.defined_tables.ensureUnusedCapacity(self.allocator, len);
         return self;
     }
 
     pub fn visitTable(self: *@This(), _: usize, typ: wasm.TableType) !void {
-        self.tables.appendAssumeCapacity(typ);
+        self.defined_tables.appendAssumeCapacity(typ);
     }
 
     pub fn visitMemorySection(self: *@This(), len: usize) !*@This() {
-        try self.memories.ensureUnusedCapacity(self.allocator, len);
+        try self.defined_memories.ensureUnusedCapacity(self.allocator, len);
         return self;
     }
 
     pub fn visitMemory(self: *@This(), _: usize, typ: wasm.MemoryType) !void {
-        self.memories.appendAssumeCapacity(typ);
+        self.defined_memories.appendAssumeCapacity(typ);
     }
 
     pub fn visitGlobalSection(self: *@This(), len: usize) !*@This() {
-        try self.globals.ensureUnusedCapacity(self.allocator, len);
+        try self.defined_globals.ensureUnusedCapacity(self.allocator, len);
         return self;
     }
 
     pub fn visitGlobal(self: *@This(), _: usize, global: wasm.Global) !void {
-        self.globals.appendAssumeCapacity(global);
+        self.defined_globals.appendAssumeCapacity(global);
     }
 
     pub fn visitExportSection(self: *@This(), len: usize) !*@This() {
@@ -344,7 +344,7 @@ const ImportedFunction = struct {
 };
 
 const ImportedTable = struct {
-    wasm: wasm.ImportedFunction,
+    wasm: wasm.ImportedTable,
     ptr_offset: usize = undefined,
 };
 

@@ -801,10 +801,10 @@ pub const Decoder = struct {
         };
 
         return switch (try self.nextByte()) {
-            0x00 => visitor.visitImportedFunction(name, try self.nextInt(TypeIndex)),
-            0x01 => visitor.visitImportedTable(name, try self.nextTableType()),
-            0x02 => visitor.visitImportedMemory(name, try self.nextMemoryType()),
-            0x03 => visitor.visitImportedGlobal(name, try self.nextGlobalType()),
+            0x00 => visitor.visitImportedFunction(ImportedFunction{ .name = name, .type = try self.nextInt(TypeIndex) }),
+            0x01 => visitor.visitImportedTable(ImportedTable{ .name = name, .type = try self.nextTableType() }),
+            0x02 => visitor.visitImportedMemory(ImportedMemory{ .name = name, .type = try self.nextMemoryType() }),
+            0x03 => visitor.visitImportedGlobal(ImportedGlobal{ .name = name, .type = try self.nextGlobalType() }),
             else => error.UnsupportedImport,
         };
     }
@@ -1009,9 +1009,7 @@ pub const Decoder = struct {
         }
     }
 
-    pub fn nextSection(self: *@This(), visitor: anytype) !void {
-        // TODO: validate section order during enumeration
-
+    pub fn nextSection(self: *@This(), section_order_bookmark: *u32, visitor: anytype) !void {
         const id = try self.nextByte();
         const len = try self.nextInt(u32);
         const contents = try self.nextBytes(len);
@@ -1024,56 +1022,77 @@ pub const Decoder = struct {
             },
 
             1 => {
+                if (section_order_bookmark.* > 1) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 1;
                 const num_types = try contents_decoder.nextInt(u32);
                 const type_visitor = try visitor.visitTypeSection(num_types);
                 for (0..num_types) |i| try type_visitor.visitType(i, try contents_decoder.nextFunctionType());
             },
 
             2 => {
+                if (section_order_bookmark.* > 2) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 2;
                 const num_imports = try contents_decoder.nextInt(u32);
                 const import_visitor = try visitor.visitImportSection(num_imports);
                 for (0..num_imports) |_| try contents_decoder.nextImport(import_visitor);
             },
 
             3 => {
+                if (section_order_bookmark.* > 3) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 3;
                 const num_functions = try contents_decoder.nextInt(u32);
                 const function_visitor = try visitor.visitFunctionSection(num_functions);
                 for (0..num_functions) |i| try function_visitor.visitFunction(i, try contents_decoder.nextInt(FunctionIndex));
             },
 
             4 => {
+                if (section_order_bookmark.* > 4) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 4;
                 const num_tables = try contents_decoder.nextInt(u32);
                 const table_visitor = try visitor.visitTableSection(num_tables);
                 for (0..num_tables) |i| try table_visitor.visitTable(i, try contents_decoder.nextTableType());
             },
 
             5 => {
+                if (section_order_bookmark.* > 5) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 5;
                 const num_memories = try contents_decoder.nextInt(u32);
                 const memory_visitor = try visitor.visitMemorySection(num_memories);
                 for (0..num_memories) |i| try memory_visitor.visitMemory(i, try contents_decoder.nextMemoryType());
             },
 
             6 => {
+                if (section_order_bookmark.* > 6) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 6;
                 const num_globals = try contents_decoder.nextInt(u32);
                 const global_visitor = try visitor.visitGlobalSection(num_globals);
                 for (0..num_globals) |i| try global_visitor.visitGlobal(i, try contents_decoder.nextGlobal());
             },
 
             7 => {
+                if (section_order_bookmark.* > 7) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 7;
                 const num_exports = try contents_decoder.nextInt(u32);
                 const export_visitor = try visitor.visitExportSection(num_exports);
                 for (0..num_exports) |i| try export_visitor.visitExport(i, try contents_decoder.nextExport());
             },
 
             8 => {
+                if (section_order_bookmark.* > 8) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 9;
                 try visitor.visitStartSection(try contents_decoder.nextInt(FunctionIndex));
             },
 
             9 => {
+                if (section_order_bookmark.* > 9) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 9;
                 @panic("TODO handle element sections");
             },
 
             10 => {
+                if (section_order_bookmark.* > 10) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 10;
+
                 const num_codes = try contents_decoder.nextInt(u32);
                 const code_visitor = try visitor.visitCodeSection(num_codes);
                 for (0..num_codes) |i| {
@@ -1096,10 +1115,13 @@ pub const Decoder = struct {
             },
 
             11 => {
+                section_order_bookmark.* = 11;
                 @panic("TODO handle data sections");
             },
 
             12 => {
+                if (section_order_bookmark.* > 9) return error.UnsupportedSectionOrder;
+                section_order_bookmark.* = 10;
                 try visitor.visitDataCountSection(try contents_decoder.nextInt(u32));
             },
 
@@ -1123,8 +1145,8 @@ pub fn visitModule(module_data: []const u8, visitor: anytype) !void {
     if (!std.meta.eql(version.*, .{ 0x01, 0x00, 0x00, 0x00 }))
         return error.UnsupportedBinaryFormatVersion;
 
-    while (decoder.hasRemainingData())
-        try decoder.nextSection(visitor);
+    var section_order_bookmark: u32 = 0;
+    while (decoder.hasRemainingData()) try decoder.nextSection(&section_order_bookmark, visitor);
 }
 
 test "ref all" {
