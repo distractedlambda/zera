@@ -19,6 +19,7 @@ const ModuleCompiler = struct {
     operand_stack: std.ArrayListUnmanaged(Operand) = .{},
     label_stack: std.ArrayListUnmanaged(Label) = .{},
     locals: std.ArrayListUnmanaged(Local) = .{},
+    current_block: *ir.Block = undefined,
 
     fn init(allocator: std.mem.Allocator) @This() {
         return .{
@@ -32,6 +33,7 @@ const ModuleCompiler = struct {
         self.operand_stack.clearRetainingCapacity();
         self.label_stack.clearRetainingCapacity();
         self.locals.clearRetainingCapacity();
+        self.current_block = undefined;
     }
 
     fn reset(self: *@This()) void {
@@ -69,6 +71,10 @@ const ModuleCompiler = struct {
         const memory = try self.nodeAllocator().create(@TypeOf(node));
         memory.* = node;
         return memory;
+    }
+
+    fn popOperand(self: *@This()) !Operand {
+        return self.operand_stack.popOrNull() orelse error.OperandStackUnderflow;
     }
 
     fn visitCustomSection(self: *@This(), name: []const u8, data: []const u8) void {
@@ -131,6 +137,16 @@ const ModuleCompiler = struct {
 
     fn visitSimpleInstruction(self: *@This(), opcode: wasm.SimpleInstruction) !void {
         switch (opcode) {
+            .@"unreachable" => {
+                self.current_block.append(&(try self.newNode(ir.Udf{ .immediate = 0 })).base);
+            },
+
+            .nop => {},
+
+            .drop => {
+                _ = try self.popOperand();
+            },
+
             else => std.debug.panic("TODO implement {}", .{opcode}),
         }
     }
