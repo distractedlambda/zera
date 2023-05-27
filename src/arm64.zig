@@ -25,12 +25,84 @@ pub const ModuleCompiler = struct {
     operand_stack: std.ArrayListUnmanaged(Operand) = .{},
     label_stack: std.ArrayListUnmanaged(Label) = .{},
     locals: std.ArrayListUnmanaged(Local) = .{},
-    i32_zero: *ir.I32Const = undefined,
-    i64_zero: *ir.I64Const = undefined,
-    f32_zero: *ir.F32Const = undefined,
-    f64_zero: *ir.F64Const = undefined,
-    v128_zero: *ir.V128Const = undefined,
+    interned_instructions: InternedInstructions = .{},
+    env_ptr: *ir.Instruction = undefined,
     current_block: *ir.Block = undefined,
+
+    const InternedInstructions = std.HashMapUnmanaged(
+        *ir.Instruction,
+        void,
+        InternedInstructionsContext,
+        std.hash_map.default_max_load_percentage,
+    );
+
+    const InternedInstructionsContext = struct {
+        pub fn hash(self: @This(), key: *ir.Instruction) u64 {
+            _ = self;
+            return key.dedupHash();
+        }
+
+        pub fn eql(self: @This(), a: *ir.Instruction, b: *ir.Instruction) bool {
+            _ = self;
+            return a.dedupEql(b);
+        }
+    };
+
+    const AdaptedInternedInstructionsContext = struct {
+        pub fn hash(self: @This(), key: *const ir.Instruction) u64 {
+            _ = self;
+            return key.dedupHash();
+        }
+
+        pub fn eql(self: @This(), a: *const ir.Instruction, b: *ir.Instruction) bool {
+            _ = self;
+            return a.dedupEql(b);
+        }
+    };
+
+    fn internInstruction(self: *@This(), instruction: anytype) !*ir.Instruction {
+        const result = try self.interned_instructions.getOrPutAdapted(
+            self.allocator,
+            &instruction.base,
+            AdaptedInternedInstructionsContext{},
+        );
+
+        if (result.found_existing) {
+            return result.key_ptr.*;
+        } else {
+            const new_instruction = try self.newNode(instruction);
+            result.key_ptr.* = &new_instruction.base;
+            return &new_instruction.base;
+        }
+    }
+
+    fn genI32Const(self: *@This(), value: u32) !*ir.Instruction {
+        return self.internInstruction(ir.I32Const{ .value = value });
+    }
+
+    fn genI64Const(self: *@This(), value: u64) !*ir.Instruction {
+        return self.internInstruction(ir.I64Const{ .value = value });
+    }
+
+    fn genF32Const(self: *@This(), value: u32) !*ir.Instruction {
+        return self.internInstruction(ir.F32Const{ .value = value });
+    }
+
+    fn genF64Const(self: *@This(), value: u64) !*ir.Instruction {
+        return self.internInstruction(ir.F64Const{ .value = value });
+    }
+
+    fn genV128Const(self: *@This(), value: u128) !*ir.Instruction {
+        return self.internInstruction(ir.V128Const{ .value = value });
+    }
+
+    fn genPureUnaryOp(self: *@This(), opcode: ir.Opcode, operand: *ir.Instruction) !*ir.Instruction {
+        return self.internInstruction(ir.PureUnaryOp.init(opcode, operand));
+    }
+
+    fn genPureBinaryOp(self: *@This(), opcode: ir.Opcode, lhs: *ir.Instruction, rhs: *ir.Instruction) !*ir.Instruction {
+        return self.internInstruction(ir.PureBinaryOp.init(opcode, lhs, rhs));
+    }
 
     pub fn init(allocator: std.mem.Allocator) @This() {
         return .{
@@ -72,6 +144,7 @@ pub const ModuleCompiler = struct {
         self.operand_stack.deinit(self.allocator);
         self.label_stack.deinit(self.allocator);
         self.locals.deinit(self.allocator);
+        self.interned_instructions.deinit(self.allocator);
     }
 
     pub fn nodeAllocator(self: *@This()) std.mem.Allocator {
@@ -265,12 +338,9 @@ pub const ModuleCompiler = struct {
         self.operand_stack.clearRetainingCapacity();
         self.label_stack.clearRetainingCapacity();
         self.locals.clearRetainingCapacity();
+        self.interned_instructions.clearRetainingCapacity();
 
-        self.i32_zero = try self.newNode(ir.I32Const{ .value = 0 });
-        self.i64_zero = try self.newNode(ir.I64Const{ .value = 0 });
-        self.f32_zero = try self.newNode(ir.F32Const{ .value = 0 });
-        self.f64_zero = try self.newNode(ir.F64Const{ .value = 0 });
-        self.v128_zero = try self.newNode(ir.V128Const{ .value = 0 });
+        self.env_ptr = try self.newNode(ir.Instruction.init(.env_ptr));
         self.current_block = try self.newNode(ir.Block{});
 
         return self;
@@ -278,11 +348,11 @@ pub const ModuleCompiler = struct {
 
     pub fn visitLocals(self: *@This(), count: u32, typ: wasm.ValueType) !void {
         const fill = switch (typ) {
-            .i32, .funcref => &self.i32_zero.base,
-            .i64 => &self.i64_zero.base,
-            .f32 => &self.f32_zero.base,
-            .f64 => &self.f64_zero.base,
-            .v128 => &self.v128_zero.base,
+            .i32, .funcref => try self.genI32Const(0),
+            .i64 => try self.genI64Const(0),
+            .f32 => try self.genF32Const(0),
+            .f64 => try self.genF64Const(0),
+            .v128 => try self.genV128Const(0),
             .externref => @panic("TODO implement externref support"),
         };
 
@@ -301,19 +371,19 @@ pub const ModuleCompiler = struct {
     }
 
     pub fn visitI32Const(self: *@This(), value: i32) !void {
-        try self.pushOperand(&(try self.newNode(ir.I32Const{ .value = value })).base, .i32);
+        try self.pushOperand(try self.genI32Const(@bitCast(u32, value)), .i32);
     }
 
     pub fn visitI64Const(self: *@This(), value: i64) !void {
-        try self.pushOperand(&(try self.newNode(ir.I64Const{ .value = value })).base, .i64);
+        try self.pushOperand(try self.genI64Const(@bitCast(u64, value)), .i64);
     }
 
     pub fn visitF32Const(self: *@This(), value: f32) !void {
-        try self.pushOperand(&(try self.newNode(ir.F32Const{ .value = value })).base, .f32);
+        try self.pushOperand(try self.genF32Const(@bitCast(u32, value)), .f32);
     }
 
     pub fn visitF64Const(self: *@This(), value: f64) !void {
-        try self.pushOperand(&(try self.newNode(ir.F64Const{ .value = value })).base, .f64);
+        try self.pushOperand(try self.genF64Const(@bitCast(u64, value)), .f64);
     }
 
     pub fn visitSimpleInstruction(self: *@This(), opcode: wasm.SimpleInstruction) !void {

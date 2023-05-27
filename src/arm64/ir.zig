@@ -3,6 +3,7 @@ const wasm = @import("../wasm.zig");
 
 pub const Opcode = enum {
     udf,
+    env_ptr,
 
     br,
     br_if,
@@ -416,6 +417,84 @@ pub const Instruction = struct {
     pub fn init(opcode: Opcode) @This() {
         return .{ .opcode = opcode };
     }
+
+    pub fn dedupHash(self: *const @This()) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, self.opcode);
+
+        switch (@enumToInt(self.opcode)) {
+            @enumToInt(Opcode.i32_const) => {
+                std.hash.autoHash(&hasher, @fieldParentPtr(I32Const, "base", self).value);
+            },
+
+            @enumToInt(Opcode.i64_const) => {
+                std.hash.autoHash(&hasher, @fieldParentPtr(I64Const, "base", self).value);
+            },
+
+            @enumToInt(Opcode.f32_const) => {
+                std.hash.autoHash(&hasher, @fieldParentPtr(F32Const, "base", self).value);
+            },
+
+            @enumToInt(Opcode.f64_const) => {
+                std.hash.autoHash(&hasher, @fieldParentPtr(F64Const, "base", self).value);
+            },
+
+            @enumToInt(Opcode.v128_const) => {
+                std.hash.autoHash(&hasher, @fieldParentPtr(V128Const, "base", self).value);
+            },
+
+            @enumToInt(Opcode.i32_eqz)...@enumToInt(Opcode.f64x2_convert_low_i32x4_u) => {
+                std.hash.autoHash(&hasher, @fieldParentPtr(PureUnaryOp, "base", self).operand);
+            },
+
+            @enumToInt(Opcode.i32_eq)...@enumToInt(Opcode.f64x2_pmax) => {
+                const derived = @fieldParentPtr(PureBinaryOp, "base", self);
+                std.hash.autoHash(&hasher, derived.lhs);
+                std.hash.autoHash(&hasher, derived.rhs);
+            },
+
+            else => unreachable,
+        }
+
+        return hasher.final();
+    }
+
+    pub fn dedupEql(self: *const @This(), other: *const @This()) bool {
+        if (self.opcode != other.opcode) return false;
+        switch (@enumToInt(self.opcode)) {
+            @enumToInt(Opcode.i32_const) => {
+                return @fieldParentPtr(I32Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+            },
+
+            @enumToInt(Opcode.i64_const) => {
+                return @fieldParentPtr(I64Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+            },
+
+            @enumToInt(Opcode.f32_const) => {
+                return @fieldParentPtr(F32Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+            },
+
+            @enumToInt(Opcode.f64_const) => {
+                return @fieldParentPtr(F64Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+            },
+
+            @enumToInt(Opcode.v128_const) => {
+                return @fieldParentPtr(V128Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+            },
+
+            @enumToInt(Opcode.i32_eqz)...@enumToInt(Opcode.f64x2_convert_low_i32x4_u) => {
+                return @fieldParentPtr(PureUnaryOp, "base", self).operand == @fieldParentPtr(PureUnaryOp, "base", other).operand;
+            },
+
+            @enumToInt(Opcode.i32_eq)...@enumToInt(Opcode.f64x2_pmax) => {
+                const self_derived = @fieldParentPtr(PureBinaryOp, "base", self);
+                const other_derived = @fieldParentPtr(PureBinaryOp, "base", other);
+                return self_derived.lhs == other_derived.lhs and self_derived.rhs == other_derived.rhs;
+            },
+
+            else => unreachable,
+        }
+    }
 };
 
 pub const Block = struct {
@@ -529,22 +608,22 @@ pub const Store = struct {
 
 pub const I32Const = struct {
     base: Instruction = Instruction.init(.i32_const),
-    value: i32,
+    value: u32,
 };
 
 pub const I64Const = struct {
     base: Instruction = Instruction.init(.i64_const),
-    value: i64,
+    value: u64,
 };
 
 pub const F32Const = struct {
     base: Instruction = Instruction.init(.f32_const),
-    value: f32,
+    value: u32,
 };
 
 pub const F64Const = struct {
     base: Instruction = Instruction.init(.f64_const),
-    value: f64,
+    value: u64,
 };
 
 pub const V128Const = struct {
