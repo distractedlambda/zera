@@ -443,17 +443,7 @@ pub const Instruction = struct {
                 std.hash.autoHash(&hasher, @fieldParentPtr(V128Const, "base", self).value);
             },
 
-            @enumToInt(Opcode.i32_eqz)...@enumToInt(Opcode.f64x2_convert_low_i32x4_u) => {
-                std.hash.autoHash(&hasher, @fieldParentPtr(PureUnaryOp, "base", self).operand);
-            },
-
-            @enumToInt(Opcode.i32_eq)...@enumToInt(Opcode.f64x2_pmax) => {
-                const derived = @fieldParentPtr(PureBinaryOp, "base", self);
-                std.hash.autoHash(&hasher, derived.lhs);
-                std.hash.autoHash(&hasher, derived.rhs);
-            },
-
-            else => unreachable,
+            else => @panic("unsupported opcode"),
         }
 
         return hasher.final();
@@ -467,32 +457,22 @@ pub const Instruction = struct {
             },
 
             @enumToInt(Opcode.i64_const) => {
-                return @fieldParentPtr(I64Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+                return @fieldParentPtr(I64Const, "base", self).value == @fieldParentPtr(I64Const, "base", other).value;
             },
 
             @enumToInt(Opcode.f32_const) => {
-                return @fieldParentPtr(F32Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+                return @fieldParentPtr(F32Const, "base", self).value == @fieldParentPtr(F32Const, "base", other).value;
             },
 
             @enumToInt(Opcode.f64_const) => {
-                return @fieldParentPtr(F64Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+                return @fieldParentPtr(F64Const, "base", self).value == @fieldParentPtr(F64Const, "base", other).value;
             },
 
             @enumToInt(Opcode.v128_const) => {
-                return @fieldParentPtr(V128Const, "base", self).value == @fieldParentPtr(I32Const, "base", other).value;
+                return @fieldParentPtr(V128Const, "base", self).value == @fieldParentPtr(V128Const, "base", other).value;
             },
 
-            @enumToInt(Opcode.i32_eqz)...@enumToInt(Opcode.f64x2_convert_low_i32x4_u) => {
-                return @fieldParentPtr(PureUnaryOp, "base", self).operand == @fieldParentPtr(PureUnaryOp, "base", other).operand;
-            },
-
-            @enumToInt(Opcode.i32_eq)...@enumToInt(Opcode.f64x2_pmax) => {
-                const self_derived = @fieldParentPtr(PureBinaryOp, "base", self);
-                const other_derived = @fieldParentPtr(PureBinaryOp, "base", other);
-                return self_derived.lhs == other_derived.lhs and self_derived.rhs == other_derived.rhs;
-            },
-
-            else => unreachable,
+            else => @panic("unsupported opcode"),
         }
     }
 };

@@ -96,14 +96,6 @@ pub const ModuleCompiler = struct {
         return self.internInstruction(ir.V128Const{ .value = value });
     }
 
-    fn genPureUnaryOp(self: *@This(), opcode: ir.Opcode, operand: *ir.Instruction) !*ir.Instruction {
-        return self.internInstruction(ir.PureUnaryOp.init(opcode, operand));
-    }
-
-    fn genPureBinaryOp(self: *@This(), opcode: ir.Opcode, lhs: *ir.Instruction, rhs: *ir.Instruction) !*ir.Instruction {
-        return self.internInstruction(ir.PureBinaryOp.init(opcode, lhs, rhs));
-    }
-
     pub fn init(allocator: std.mem.Allocator) @This() {
         return .{
             .allocator = allocator,
