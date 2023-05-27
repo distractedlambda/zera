@@ -7,19 +7,29 @@ pub const ModuleCompiler = struct {
     allocator: std.mem.Allocator,
 
     types: std.ArrayListUnmanaged(wasm.FunctionType) = .{},
-    imports: std.ArrayListUnmanaged(wasm.Import) = .{},
-    functions: std.ArrayListUnmanaged(wasm.TypeIndex) = .{},
-    tables: std.ArrayListUnmanaged(wasm.TableType) = .{},
-    memories: std.ArrayListUnmanaged(wasm.MemoryType) = .{},
-    globals: std.ArrayListUnmanaged(wasm.Global) = .{},
+    imported_functions: std.ArrayListUnmanaged(ImportedFunction) = .{},
+    imported_tables: std.ArrayListUnmanaged(ImportedTable) = .{},
+    imported_memories: std.ArrayListUnmanaged(ImportedMemory) = .{},
+    imported_globals: std.ArrayListUnmanaged(ImportedGlobal) = .{},
+    defined_functions: std.ArrayListUnmanaged(wasm.TypeIndex) = .{},
+    defined_tables: std.ArrayListUnmanaged(wasm.TableType) = .{},
+    defined_memories: std.ArrayListUnmanaged(wasm.MemoryType) = .{},
+    defined_globals: std.ArrayListUnmanaged(wasm.Global) = .{},
     exports: std.ArrayListUnmanaged(wasm.Export) = .{},
     start: ?wasm.FunctionIndex = null,
     data_count: ?u32 = null,
+
+    current_function: wasm.FunctionIndex = 0,
 
     node_arena: std.heap.ArenaAllocator,
     operand_stack: std.ArrayListUnmanaged(Operand) = .{},
     label_stack: std.ArrayListUnmanaged(Label) = .{},
     locals: std.ArrayListUnmanaged(Local) = .{},
+    i32_zero: *ir.I32Const = undefined,
+    i64_zero: *ir.I64Const = undefined,
+    f32_zero: *ir.F32Const = undefined,
+    f64_zero: *ir.F64Const = undefined,
+    v128_zero: *ir.V128Const = undefined,
     current_block: *ir.Block = undefined,
 
     pub fn init(allocator: std.mem.Allocator) @This() {
@@ -29,33 +39,32 @@ pub const ModuleCompiler = struct {
         };
     }
 
-    pub fn resetFunction(self: *@This()) void {
-        _ = self.node_arena.reset(.retain_capacity);
-        self.operand_stack.clearRetainingCapacity();
-        self.label_stack.clearRetainingCapacity();
-        self.locals.clearRetainingCapacity();
-        self.current_block = undefined;
-    }
-
     pub fn reset(self: *@This()) void {
         self.types.clearRetainingCapacity();
-        self.imports.clearRetainingCapacity();
-        self.functions.clearRetainingCapacity();
-        self.tables.clearRetainingCapacity();
-        self.memories.clearRetainingCapacity();
-        self.globals.clearRetainingCapacity();
+        self.imported_functions.clearRetainingCapacity();
+        self.imported_tables.clearRetainingCapacity();
+        self.imported_memories.clearRetainingCapacity();
+        self.imported_globals.clearRetainingCapacity();
+        self.defined_functions.clearRetainingCapacity();
+        self.defined_tables.clearRetainingCapacity();
+        self.defined_memories.clearRetainingCapacity();
+        self.defined_globals.clearRetainingCapacity();
         self.exports.clearRetainingCapacity();
-
-        self.resetFunction();
+        self.start = null;
+        self.data_count = null;
+        self.current_function = 0;
     }
 
     pub fn deinit(self: *@This()) void {
         self.types.deinit(self.allocator);
-        self.imports.deinit(self.allocator);
-        self.functions.deinit(self.allocator);
-        self.tables.deinit(self.allocator);
-        self.memories.deinit(self.allocator);
-        self.globals.deinit(self.allocator);
+        self.imported_functions.deinit(self.allocator);
+        self.imported_tables.deinit(self.allocator);
+        self.imported_memories.deinit(self.allocator);
+        self.imported_globals.deinit(self.allocator);
+        self.defined_functions.deinit(self.allocator);
+        self.defined_tables.deinit(self.allocator);
+        self.defined_memories.deinit(self.allocator);
+        self.defined_globals.deinit(self.allocator);
         self.exports.deinit(self.allocator);
 
         self.node_arena.deinit();
@@ -97,13 +106,24 @@ pub const ModuleCompiler = struct {
         self.types.appendAssumeCapacity(typ);
     }
 
-    pub fn visitImportSection(self: *@This(), len: usize) !*@This() {
-        try self.imports.ensureUnusedCapacity(self.allocator, len);
+    pub fn visitImportSection(self: *@This(), _: usize) !*@This() {
         return self;
     }
 
-    pub fn visitImport(self: *@This(), _: usize, import: wasm.Import) !void {
-        self.imports.appendAssumeCapacity(import);
+    pub fn visitImportedFunction(self: *@This(), func: wasm.ImportedFunction) !void {
+        try self.imported_functions.append(self.allocator, .{ .wasm = func });
+    }
+
+    pub fn visitImportedTable(self: *@This(), func: wasm.ImportedTable) !void {
+        try self.imported_tables.append(self.allocator, .{ .wasm = func });
+    }
+
+    pub fn visitImportedMemory(self: *@This(), func: wasm.ImportedMemory) !void {
+        try self.imported_memories.append(self.allocator, .{ .wasm = func });
+    }
+
+    pub fn visitImportedGlobal(self: *@This(), func: wasm.ImportedGlobal) !void {
+        try self.imported_globals.append(self.allocator, .{ .wasm = func });
     }
 
     pub fn visitFunctionSection(self: *@This(), len: usize) !*@This() {
@@ -153,6 +173,46 @@ pub const ModuleCompiler = struct {
 
     pub fn visitStartSection(self: *@This(), start: wasm.FunctionIndex) !void {
         self.start = start;
+    }
+
+    pub fn visitCodeSection(self: *@This(), _: usize) !*@This() {
+        return self;
+    }
+
+    pub fn visitFunctionCode(self: *@This(), _: usize) !*@This() {
+        if (self.current_function >= self.functions.items.len)
+            return error.UndeclaredFunction;
+
+        _ = self.node_arena.reset(self.allocator, .retain_capacity);
+
+        self.operand_stack.clearRetainingCapacity();
+        self.label_stack.clearRetainingCapacity();
+        self.locals.clearRetainingCapacity();
+
+        self.i32_zero = try self.newNode(ir.I32Const{ .value = 0 });
+        self.i64_zero = try self.newNode(ir.I64Const{ .value = 0 });
+        self.f32_zero = try self.newNode(ir.F32Const{ .value = 0 });
+        self.f64_zero = try self.newNode(ir.F64Const{ .value = 0 });
+        self.v128_zero = try self.newNode(ir.V128Const{ .value = 0 });
+        self.funcref_null = try self.newNode(ir.Instruction.init(.funcref_null));
+        self.externref_null = try self.newNode(ir.Instruction.init(.externref_null));
+        self.current_block = try self.newNode(ir.Block{});
+
+        return self;
+    }
+
+    pub fn visitLocals(self: *@This(), count: u32, typ: wasm.ValueType) !void {
+        const fill = switch (typ) {
+            .i32, .funcref => self.i32_zero,
+            .i64 => self.i64_zero,
+            .f32 => self.f32_zero,
+            .f64 => self.f64_zero,
+            .v128 => self.v128_zero,
+            .externref => @panic("TODO implement externref support"),
+        };
+
+        _ = count;
+        _ = fill;
     }
 
     pub fn visitDataCountSection(self: *@This(), count: u32) !void {
@@ -278,6 +338,41 @@ pub const ModuleCompiler = struct {
     }
 };
 
+const ImportedFunction = struct {
+    wasm: wasm.ImportedFunction,
+    vtable_offset: usize = undefined,
+};
+
+const ImportedTable = struct {
+    wasm: wasm.ImportedFunction,
+    ptr_offset: usize = undefined,
+};
+
+const ImportedMemory = struct {
+    wasm: wasm.ImportedMemory,
+    ptr_offset: usize = undefined,
+};
+
+const ImportedGlobal = struct {
+    wasm: wasm.ImportedGlobal,
+    ptr_offset: usize = undefined,
+};
+
+const ImportedFunctionVTable = extern struct {
+    context: *anyopaque,
+    impl: *fn (context: *anyopaque, in: *const anyopaque, out: *anyopaque) callconv(.C) void,
+};
+
+const Table = extern struct {
+    contents: ?[*]u32,
+    size: u32,
+};
+
+const Memory = extern struct {
+    base: usize,
+    size: u32,
+};
+
 const Operand = struct {
     value: *ir.Instruction,
     type: wasm.ValueType,
@@ -289,10 +384,7 @@ const Label = struct {
 
 const Local = struct {
     value: *ir.Instruction,
-};
-
-const Function = struct {
-    type: wasm.TypeIndex,
+    type: wasm.ValueType,
 };
 
 pub fn compile(module_data: []const u8, allocator: std.mem.Allocator) !void {

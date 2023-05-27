@@ -24,9 +24,10 @@ pub const Opcode = enum {
     f32_const,
     f64_const,
     v128_const,
-    funcref_null,
-    externref_null,
-    ref_func,
+
+    // -- arguments
+    function_arg,
+    block_arg,
 
     // -- pure unary ops
     // ---- pure unary ops (i32 result)
@@ -471,11 +472,6 @@ pub const CallIndirect = struct {
     arguments: []*Instruction,
 };
 
-pub const RefFunc = struct {
-    base: Instruction = Instruction.init(.ref_func),
-    function: wasm.FunctionIndex,
-};
-
 pub const GlobalGet = struct {
     base: SequencedInstruction = SequencedInstruction.init(.global_get),
     global: wasm.GlobalIndex,
@@ -578,6 +574,17 @@ pub const PureBinaryOp = struct {
     pub fn init(opcode: Opcode, lhs: *Instruction, rhs: *Instruction) @This() {
         return .{ .base = Instruction.init(opcode), .lhs = lhs, .rhs = rhs };
     }
+};
+
+pub const FunctionArg = struct {
+    base: Instruction = Instruction.init(.function_arg),
+    index: u32,
+};
+
+pub const BlockArg = struct {
+    base: Instruction = Instruction.init(.block_arg),
+    block: *Block,
+    index: u32,
 };
 
 test "ref all" {

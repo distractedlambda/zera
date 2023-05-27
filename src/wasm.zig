@@ -539,17 +539,29 @@ pub const MemoryArgument = struct {
 
 pub const Name = []const u8;
 
-pub const ImportDesc = union(enum) {
-    function: FunctionIndex,
-    table: TableType,
-    memory: MemoryType,
-    global: GlobalType,
+pub const ImportName = struct {
+    module: []const u8,
+    name: []const u8,
 };
 
-pub const Import = struct {
-    module_name: []const u8,
-    name: []const u8,
-    desc: ImportDesc,
+pub const ImportedFunction = struct {
+    name: ImportName,
+    type: TypeIndex,
+};
+
+pub const ImportedTable = struct {
+    name: ImportName,
+    type: TableType,
+};
+
+pub const ImportedMemory = struct {
+    name: ImportName,
+    type: MemoryType,
+};
+
+pub const ImportedGlobal = struct {
+    name: ImportName,
+    type: GlobalType,
 };
 
 pub const ConstantExpression = union(enum) {
@@ -782,21 +794,18 @@ pub const Decoder = struct {
         };
     }
 
-    pub fn nextImportDesc(self: *@This()) !ImportDesc {
-        return switch (try self.nextByte()) {
-            0x00 => .{ .function = try self.nextInt(FunctionIndex) },
-            0x01 => .{ .table = try self.nextTableType() },
-            0x02 => .{ .memory = try self.nextMemoryType() },
-            0x03 => .{ .global = try self.nextGlobalType() },
-            else => error.UnsupportedImportDesc,
-        };
-    }
-
-    pub fn nextImport(self: *@This()) !Import {
-        return .{
-            .module_name = try self.nextName(),
+    pub fn nextImport(self: *@This(), visitor: anytype) !void {
+        const name = ImportName{
+            .module = try self.nextName(),
             .name = try self.nextName(),
-            .desc = try self.nextImportDesc(),
+        };
+
+        return switch (try self.nextByte()) {
+            0x00 => visitor.visitImportedFunction(name, try self.nextInt(TypeIndex)),
+            0x01 => visitor.visitImportedTable(name, try self.nextTableType()),
+            0x02 => visitor.visitImportedMemory(name, try self.nextMemoryType()),
+            0x03 => visitor.visitImportedGlobal(name, try self.nextGlobalType()),
+            else => error.UnsupportedImport,
         };
     }
 
@@ -842,30 +851,42 @@ pub const Decoder = struct {
         };
     }
 
-    pub fn nextInstruction(self: *@This(), comptime R: type, visitor: anytype) !R {
-        return switch (try self.nextByte()) {
-            0x0e => blk: {
+    pub fn nextInstruction(self: *@This(), visitor: anytype) !void {
+        switch (try self.nextByte()) {
+            0x0e => {
                 const len = try self.nextInt(u32);
-                var table_visitor = try visitor.visitBrTable(len);
+                const table_visitor = try visitor.visitBrTable(len);
                 for (0..len) |i| try table_visitor.visitCase(i, try self.nextInt(u32));
-                break :blk table_visitor.visitDefault(try self.nextInt(u32));
+                try table_visitor.visitDefault(try self.nextInt(u32));
             },
 
-            0x1b => visitor.visitSelect(null),
+            0x1b => {
+                try visitor.visitSelect(null);
+            },
 
-            0x1c => visitor.visitSelect(switch (self.nextInt(u32)) {
-                0 => null,
-                1 => try self.nextValueType(),
-                else => return error.UnsupportedInstruction,
-            }),
+            0x1c => {
+                try visitor.visitSelect(switch (self.nextInt(u32)) {
+                    0 => null,
+                    1 => try self.nextValueType(),
+                    else => return error.UnsupportedInstruction,
+                });
+            },
 
-            0x41 => visitor.visitI32Const(try self.nextInt(i32)),
+            0x41 => {
+                try visitor.visitI32Const(try self.nextInt(i32));
+            },
 
-            0x42 => visitor.visitI64Const(try self.nextInt(i64)),
+            0x42 => {
+                try visitor.visitI64Const(try self.nextInt(i64));
+            },
 
-            0x43 => visitor.visitF32Const(try self.nextFloat(f32)),
+            0x43 => {
+                try visitor.visitF32Const(try self.nextFloat(f32));
+            },
 
-            0x44 => visitor.visitF64Const(try self.nextFloat(f64)),
+            0x44 => {
+                try visitor.visitF64Const(try self.nextFloat(f64));
+            },
 
             0x00,
             0x01,
@@ -876,12 +897,16 @@ pub const Decoder = struct {
             0x1b,
             0x45...0xc4,
             0xd1,
-            => |opcode| visitor.visitSimpleInstruction(@intToEnum(SimpleInstruction, opcode)),
+            => |opcode| {
+                try visitor.visitSimpleInstruction(@intToEnum(SimpleInstruction, opcode));
+            },
 
-            0x02...0x04 => |opcode| visitor.visitBlockTypeInstruction(
-                @intToEnum(BlockTypeInstruction, opcode),
-                try self.nextBlockType(),
-            ),
+            0x02...0x04 => |opcode| {
+                try visitor.visitBlockTypeInstruction(
+                    @intToEnum(BlockTypeInstruction, opcode),
+                    try self.nextBlockType(),
+                );
+            },
 
             0x0c,
             0x0d,
@@ -890,31 +915,41 @@ pub const Decoder = struct {
             0x3f,
             0x40,
             0xd2,
-            => |opcode| visitor.visitIndexInstruction(
-                @intToEnum(IndexInstruction, opcode),
-                try self.nextInt(u32),
-            ),
+            => |opcode| {
+                try visitor.visitIndexInstruction(
+                    @intToEnum(IndexInstruction, opcode),
+                    try self.nextInt(u32),
+                );
+            },
 
-            0x28...0x3e => |opcode| visitor.visitMemoryInstruction(
-                @intToEnum(MemoryInstruction, opcode),
-                try self.nextMemoryArgument(),
-            ),
+            0x28...0x3e => |opcode| {
+                try visitor.visitMemoryInstruction(
+                    @intToEnum(MemoryInstruction, opcode),
+                    try self.nextMemoryArgument(),
+                );
+            },
 
             0xfc => switch (try self.nextInt(u32)) {
-                0...7 => |opcode| visitor.extendedInstruction(@intToEnum(ExtendedInstruction, opcode)),
+                0...7 => |opcode| {
+                    try visitor.extendedInstruction(@intToEnum(ExtendedInstruction, opcode));
+                },
 
-                9, 11, 13, 15...17 => |opcode| visitor.visitExtendedIndexInstruction(
-                    @intToEnum(ExtendedIndexInstruction, opcode),
-                    try self.nextInt(u32),
-                ),
+                9, 11, 13, 15...17 => |opcode| {
+                    try visitor.visitExtendedIndexInstruction(
+                        @intToEnum(ExtendedIndexInstruction, opcode),
+                        try self.nextInt(u32),
+                    );
+                },
 
-                8, 10, 12, 14 => |opcode| visitor.visitExtendedDualIndexInstruction(
-                    @intToEnum(ExtendedDualIndexInstruction, opcode),
-                    try self.nextInt(u32),
-                    try self.nextInt(u32),
-                ),
+                8, 10, 12, 14 => |opcode| {
+                    try visitor.visitExtendedDualIndexInstruction(
+                        @intToEnum(ExtendedDualIndexInstruction, opcode),
+                        try self.nextInt(u32),
+                        try self.nextInt(u32),
+                    );
+                },
 
-                else => error.UnsupportedInstruction,
+                else => return error.UnsupportedInstruction,
             },
 
             0xfd => switch (try self.nextInt(u32)) {
@@ -934,37 +969,49 @@ pub const Decoder = struct {
                 209,
                 213...237,
                 239...255,
-                => |opcode| visitor.visitVectorInstruction(@intToEnum(VectorInstruction, opcode)),
+                => |opcode| {
+                    try visitor.visitVectorInstruction(@intToEnum(VectorInstruction, opcode));
+                },
 
-                12, 13 => |opcode| visitor.visitVector16ByteImmediateInstruction(
-                    @intToEnum(Vector16ByteImmediateInstruction, opcode),
-                    try self.nextBytes(16),
-                ),
+                12, 13 => |opcode| {
+                    try visitor.visitVector16ByteImmediateInstruction(
+                        @intToEnum(Vector16ByteImmediateInstruction, opcode),
+                        try self.nextBytes(16),
+                    );
+                },
 
-                0...11, 92, 93 => |opcode| visitor.visitVectorMemoryInstruction(
-                    @intToEnum(VectorMemoryInstruction, opcode),
-                    try self.nextMemoryArgument(),
-                ),
+                0...11, 92, 93 => |opcode| {
+                    try visitor.visitVectorMemoryInstruction(
+                        @intToEnum(VectorMemoryInstruction, opcode),
+                        try self.nextMemoryArgument(),
+                    );
+                },
 
-                21...34 => |opcode| visitor.visitVectorLaneInstruction(
-                    @intToEnum(VectorLaneInstruction, opcode),
-                    try self.nextByte(),
-                ),
+                21...34 => |opcode| {
+                    try visitor.visitVectorLaneInstruction(
+                        @intToEnum(VectorLaneInstruction, opcode),
+                        try self.nextByte(),
+                    );
+                },
 
-                84...91 => |opcode| visitor.visitVectorMemoryLaneInstruction(
-                    @intToEnum(VectorMemoryLaneInstruction, opcode),
-                    try self.nextMemoryArgument(),
-                    try self.nextByte(),
-                ),
+                84...91 => |opcode| {
+                    try visitor.visitVectorMemoryLaneInstruction(
+                        @intToEnum(VectorMemoryLaneInstruction, opcode),
+                        try self.nextMemoryArgument(),
+                        try self.nextByte(),
+                    );
+                },
 
-                else => error.UnsupportedInstruction,
+                else => return error.UnsupportedInstruction,
             },
 
-            else => error.UnsupportedInstruction,
-        };
+            else => return error.UnsupportedInstruction,
+        }
     }
 
     pub fn nextSection(self: *@This(), visitor: anytype) !void {
+        // TODO: validate section order during enumeration
+
         const id = try self.nextByte();
         const len = try self.nextInt(u32);
         const contents = try self.nextBytes(len);
@@ -978,43 +1025,43 @@ pub const Decoder = struct {
 
             1 => {
                 const num_types = try contents_decoder.nextInt(u32);
-                var type_visitor = try visitor.visitTypeSection(num_types);
+                const type_visitor = try visitor.visitTypeSection(num_types);
                 for (0..num_types) |i| try type_visitor.visitType(i, try contents_decoder.nextFunctionType());
             },
 
             2 => {
                 const num_imports = try contents_decoder.nextInt(u32);
-                var import_visitor = try visitor.visitImportSection(num_imports);
-                for (0..num_imports) |i| try import_visitor.visitImport(i, try contents_decoder.nextImport());
+                const import_visitor = try visitor.visitImportSection(num_imports);
+                for (0..num_imports) |_| try contents_decoder.nextImport(import_visitor);
             },
 
             3 => {
                 const num_functions = try contents_decoder.nextInt(u32);
-                var function_visitor = try visitor.visitFunctionSection(num_functions);
+                const function_visitor = try visitor.visitFunctionSection(num_functions);
                 for (0..num_functions) |i| try function_visitor.visitFunction(i, try contents_decoder.nextInt(FunctionIndex));
             },
 
             4 => {
                 const num_tables = try contents_decoder.nextInt(u32);
-                var table_visitor = try visitor.visitTableSection(num_tables);
+                const table_visitor = try visitor.visitTableSection(num_tables);
                 for (0..num_tables) |i| try table_visitor.visitTable(i, try contents_decoder.nextTableType());
             },
 
             5 => {
                 const num_memories = try contents_decoder.nextInt(u32);
-                var memory_visitor = try visitor.visitMemorySection(num_memories);
+                const memory_visitor = try visitor.visitMemorySection(num_memories);
                 for (0..num_memories) |i| try memory_visitor.visitMemory(i, try contents_decoder.nextMemoryType());
             },
 
             6 => {
                 const num_globals = try contents_decoder.nextInt(u32);
-                var global_visitor = try visitor.visitGlobalSection(num_globals);
+                const global_visitor = try visitor.visitGlobalSection(num_globals);
                 for (0..num_globals) |i| try global_visitor.visitGlobal(i, try contents_decoder.nextGlobal());
             },
 
             7 => {
                 const num_exports = try contents_decoder.nextInt(u32);
-                var export_visitor = try visitor.visitExportSection(num_exports);
+                const export_visitor = try visitor.visitExportSection(num_exports);
                 for (0..num_exports) |i| try export_visitor.visitExport(i, try contents_decoder.nextExport());
             },
 
@@ -1027,7 +1074,25 @@ pub const Decoder = struct {
             },
 
             10 => {
-                @panic("TODO handle code sections");
+                const num_codes = try contents_decoder.nextInt(u32);
+                const code_visitor = try visitor.visitCodeSection(num_codes);
+                for (0..num_codes) |i| {
+                    const function_code_visitor = try code_visitor.visitFunctionCode(i);
+
+                    const code_size = try contents_decoder.nextInt(u32);
+                    const code_data = try contents_decoder.nextBytes(code_size);
+                    var code_decoder = Decoder.init(code_data);
+
+                    const num_local_groups = try code_decoder.nextInt(u32);
+                    for (0..num_local_groups) |_| {
+                        const group_len = try code_decoder.nextInt(u32);
+                        const group_type = try code_decoder.nextValueType();
+                        try function_code_visitor.visitLocals(group_len, group_type);
+                    }
+
+                    while (code_decoder.hasRemainingData())
+                        try code_decoder.nextInstruction(&function_code_visitor);
+                }
             },
 
             11 => {
