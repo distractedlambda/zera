@@ -8,12 +8,13 @@ pub const ModuleCompiler = struct {
 
     types: std.ArrayListUnmanaged(wasm.FunctionType) = .{},
     imports: std.ArrayListUnmanaged(wasm.Import) = .{},
-    functions: std.ArrayListUnmanaged(Function) = .{},
+    functions: std.ArrayListUnmanaged(wasm.TypeIndex) = .{},
     tables: std.ArrayListUnmanaged(wasm.TableType) = .{},
     memories: std.ArrayListUnmanaged(wasm.MemoryType) = .{},
     globals: std.ArrayListUnmanaged(wasm.Global) = .{},
     exports: std.ArrayListUnmanaged(wasm.Export) = .{},
     start: ?wasm.FunctionIndex = null,
+    data_count: ?u32 = null,
 
     node_arena: std.heap.ArenaAllocator,
     operand_stack: std.ArrayListUnmanaged(Operand) = .{},
@@ -81,7 +82,7 @@ pub const ModuleCompiler = struct {
         return self.operand_stack.popOrNull() orelse error.OperandStackUnderflow;
     }
 
-    pub fn visitCustomSection(self: *@This(), name: []const u8, data: []const u8) void {
+    pub fn visitCustomSection(self: *@This(), name: []const u8, data: []const u8) !void {
         _ = self;
         _ = name;
         _ = data;
@@ -92,7 +93,7 @@ pub const ModuleCompiler = struct {
         return self;
     }
 
-    pub fn visitType(self: *@This(), _: u32, typ: wasm.FunctionType) void {
+    pub fn visitType(self: *@This(), _: usize, typ: wasm.FunctionType) !void {
         self.types.appendAssumeCapacity(typ);
     }
 
@@ -101,8 +102,61 @@ pub const ModuleCompiler = struct {
         return self;
     }
 
-    pub fn visitImport(self: *@This(), _: u32, import: wasm.Import) void {
+    pub fn visitImport(self: *@This(), _: usize, import: wasm.Import) !void {
         self.imports.appendAssumeCapacity(import);
+    }
+
+    pub fn visitFunctionSection(self: *@This(), len: usize) !*@This() {
+        try self.functions.ensureUnusedCapacity(self.allocator, len);
+        return self;
+    }
+
+    pub fn visitFunction(self: *@This(), _: usize, typ: wasm.TypeIndex) !void {
+        self.functions.appendAssumeCapacity(typ);
+    }
+
+    pub fn visitTableSection(self: *@This(), len: usize) !*@This() {
+        try self.tables.ensureUnusedCapacity(self.allocator, len);
+        return self;
+    }
+
+    pub fn visitTable(self: *@This(), _: usize, typ: wasm.TableType) !void {
+        self.tables.appendAssumeCapacity(typ);
+    }
+
+    pub fn visitMemorySection(self: *@This(), len: usize) !*@This() {
+        try self.memories.ensureUnusedCapacity(self.allocator, len);
+        return self;
+    }
+
+    pub fn visitMemory(self: *@This(), _: usize, typ: wasm.MemoryType) !void {
+        self.memories.appendAssumeCapacity(typ);
+    }
+
+    pub fn visitGlobalSection(self: *@This(), len: usize) !*@This() {
+        try self.globals.ensureUnusedCapacity(self.allocator, len);
+        return self;
+    }
+
+    pub fn visitGlobal(self: *@This(), _: usize, global: wasm.Global) !void {
+        self.globals.appendAssumeCapacity(global);
+    }
+
+    pub fn visitExportSection(self: *@This(), len: usize) !*@This() {
+        try self.exports.ensureUnusedCapacity(self.allocator, len);
+        return self;
+    }
+
+    pub fn visitExport(self: *@This(), _: usize, exp: wasm.Export) !void {
+        self.exports.appendAssumeCapacity(exp);
+    }
+
+    pub fn visitStartSection(self: *@This(), start: wasm.FunctionIndex) !void {
+        self.start = start;
+    }
+
+    pub fn visitDataCountSection(self: *@This(), count: u32) !void {
+        self.data_count = count;
     }
 
     pub fn visitSelect(self: *@This(), typ: ?wasm.ValueType) !void {
@@ -240,6 +294,11 @@ const Local = struct {
 const Function = struct {
     type: wasm.TypeIndex,
 };
+
+pub fn compile(module_data: []const u8, allocator: std.mem.Allocator) !void {
+    var compiler = ModuleCompiler.init(allocator);
+    try wasm.visitModule(module_data, &compiler);
+}
 
 test "ref all" {
     std.testing.refAllDeclsRecursive(@This());

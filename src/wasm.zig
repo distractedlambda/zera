@@ -588,22 +588,6 @@ pub const ElementSegmentKind = enum(u8) {
     funcref = 0x00,
 };
 
-pub const SectionId = enum(u8) {
-    custom,
-    type,
-    import,
-    function,
-    table,
-    memory,
-    global,
-    @"export",
-    start,
-    element,
-    code,
-    data,
-    data_count,
-};
-
 pub const Decoder = struct {
     data: []const u8,
 
@@ -638,6 +622,11 @@ pub const Decoder = struct {
         if (self.data.len < len) return error.UnexpectedEndOfData;
         defer self.data = self.data[len..];
         return self.data[0..len];
+    }
+
+    pub fn remainder(self: *@This()) []const u8 {
+        defer self.data = self.data[self.data.len..];
+        return self.data;
     }
 
     pub fn nextInt(self: *@This(), comptime T: type) !T {
@@ -791,11 +780,6 @@ pub const Decoder = struct {
             .alignment = try self.nextInt(u32),
             .offset = try self.nextInt(u32),
         };
-    }
-
-    pub fn nextSectionId(self: *@This()) !SectionId {
-        return std.meta.intToEnum(SectionId, try self.nextByte()) catch
-            error.UnsupportedSectionId;
     }
 
     pub fn nextImportDesc(self: *@This()) !ImportDesc {
@@ -979,7 +963,104 @@ pub const Decoder = struct {
             else => error.UnsupportedInstruction,
         };
     }
+
+    pub fn nextSection(self: *@This(), visitor: anytype) !void {
+        const id = try self.nextByte();
+        const len = try self.nextInt(u32);
+        const contents = try self.nextBytes(len);
+        var contents_decoder = Decoder.init(contents);
+
+        switch (id) {
+            0 => {
+                const name = try contents_decoder.nextName();
+                try visitor.visitCustomSection(name, contents_decoder.remainder());
+            },
+
+            1 => {
+                const num_types = try contents_decoder.nextInt(u32);
+                var type_visitor = try visitor.visitTypeSection(num_types);
+                for (0..num_types) |i| try type_visitor.visitType(i, try contents_decoder.nextFunctionType());
+            },
+
+            2 => {
+                const num_imports = try contents_decoder.nextInt(u32);
+                var import_visitor = try visitor.visitImportSection(num_imports);
+                for (0..num_imports) |i| try import_visitor.visitImport(i, try contents_decoder.nextImport());
+            },
+
+            3 => {
+                const num_functions = try contents_decoder.nextInt(u32);
+                var function_visitor = try visitor.visitFunctionSection(num_functions);
+                for (0..num_functions) |i| try function_visitor.visitFunction(i, try contents_decoder.nextInt(FunctionIndex));
+            },
+
+            4 => {
+                const num_tables = try contents_decoder.nextInt(u32);
+                var table_visitor = try visitor.visitTableSection(num_tables);
+                for (0..num_tables) |i| try table_visitor.visitTable(i, try contents_decoder.nextTableType());
+            },
+
+            5 => {
+                const num_memories = try contents_decoder.nextInt(u32);
+                var memory_visitor = try visitor.visitMemorySection(num_memories);
+                for (0..num_memories) |i| try memory_visitor.visitMemory(i, try contents_decoder.nextMemoryType());
+            },
+
+            6 => {
+                const num_globals = try contents_decoder.nextInt(u32);
+                var global_visitor = try visitor.visitGlobalSection(num_globals);
+                for (0..num_globals) |i| try global_visitor.visitGlobal(i, try contents_decoder.nextGlobal());
+            },
+
+            7 => {
+                const num_exports = try contents_decoder.nextInt(u32);
+                var export_visitor = try visitor.visitExportSection(num_exports);
+                for (0..num_exports) |i| try export_visitor.visitExport(i, try contents_decoder.nextExport());
+            },
+
+            8 => {
+                try visitor.visitStartSection(try contents_decoder.nextInt(FunctionIndex));
+            },
+
+            9 => {
+                @panic("TODO handle element sections");
+            },
+
+            10 => {
+                @panic("TODO handle code sections");
+            },
+
+            11 => {
+                @panic("TODO handle data sections");
+            },
+
+            12 => {
+                try visitor.visitDataCountSection(try contents_decoder.nextInt(u32));
+            },
+
+            else => {
+                return error.UnsupportedSection;
+            },
+        }
+
+        if (contents_decoder.hasRemainingData()) return error.ExtraDataInSection;
+    }
 };
+
+pub fn visitModule(module_data: []const u8, visitor: anytype) !void {
+    var decoder = Decoder.init(module_data);
+
+    const magic = try decoder.nextBytes(4);
+    if (!std.meta.eql(magic.*, .{ 0x00, 0x61, 0x73, 0x6d }))
+        return error.NotAWasmBinary;
+
+    const version = try decoder.nextBytes(4);
+    if (!std.meta.eql(version.*, .{ 0x01, 0x00, 0x00, 0x00 }))
+        return error.UnsupportedBinaryFormatVersion;
+
+    while (decoder.hasRemainingData())
+        try decoder.nextSection(visitor);
+}
 
 test "ref all" {
     std.testing.refAllDeclsRecursive(@This());
