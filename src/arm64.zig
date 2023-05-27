@@ -103,28 +103,28 @@ const ModuleCompiler = struct {
 
     fn visitI32Const(self: *@This(), value: i32) !void {
         try self.operand_stack.append(self.allocator, .{
-            .node = try self.newNode(ir.I32Const.init(value)),
+            .value = try self.newNode(ir.I32Const{ .value = value }),
             .type = .i32,
         });
     }
 
     fn visitI64Const(self: *@This(), value: i64) !void {
         try self.operand_stack.append(self.allocator, .{
-            .node = try self.newNode(ir.I64Const.init(value)),
+            .value = try self.newNode(ir.I64Const{ .value = value }),
             .type = .i64,
         });
     }
 
     fn visitF32Const(self: *@This(), value: f32) !void {
         try self.operand_stack.append(self.allocator, .{
-            .node = try self.newNode(ir.F32Const.init(value)),
+            .value = try self.newNode(ir.F32Const{ .value = value }),
             .type = .f32,
         });
     }
 
     fn visitF64Const(self: *@This(), value: f64) !void {
         try self.operand_stack.append(self.allocator, .{
-            .node = try self.newNode(ir.F64Const.init(value)),
+            .value = try self.newNode(ir.F64Const{ .value = value }),
             .type = .f64,
         });
     }
@@ -197,7 +197,7 @@ const ModuleCompiler = struct {
 };
 
 const Operand = struct {
-    value: *ir.Node,
+    value: *ir.Instruction,
     type: wasm.ValueType,
 };
 
@@ -206,7 +206,7 @@ const Label = struct {
 };
 
 const Local = struct {
-    value: *ir.Node,
+    value: *ir.Instruction,
 };
 
 const Function = struct {

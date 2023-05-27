@@ -1,287 +1,215 @@
 const std = @import("std");
 const wasm = @import("../wasm.zig");
 
-pub const Node = struct {
-    kind: Kind,
+pub const Opcode = enum {
+    trap,
+    br,
+    br_if,
+    br_table,
+    ret,
+    call,
+    call_indirect,
+    funcref_null,
+    externref_null,
+    ref_func,
+    global_get,
+    global_set,
+    table_get,
+    table_set,
+    table_size,
+    memory_size,
 
-    pub fn init(kind: Kind) @This() {
-        return .{ .kind = kind };
+    i32_const,
+    i64_const,
+    f32_const,
+    f64_const,
+    v128_const,
+
+    i32_load,
+    i64_load,
+    f32_load,
+    f64_load,
+    i32_load8_s,
+    i32_load8_u,
+    i32_load16_s,
+    i32_load16_u,
+    i64_load8_s,
+    i64_load8_u,
+    i64_load16_s,
+    i64_load16_u,
+    i64_load32_s,
+    i64_load32_u,
+
+    i32_store,
+    i64_store,
+    f32_store,
+    f64_store,
+    i32_store8,
+    i32_store16,
+    i64_store8,
+    i64_store16,
+    i64_store32,
+
+    v128_load,
+    v128_load_8x8_s,
+    v128_load_8x8_u,
+    v128_load_16x4_s,
+    v128_load_16x4_u,
+    v128_load_32x2_s,
+    v128_load_32x2_u,
+    v128_load8_splat,
+    v128_load16_splat,
+    v128_load32_splat,
+    v128_load64_splat,
+    v128_load32_zero,
+    v128_load64_zero,
+
+    v128_store,
+};
+
+pub const Instruction = struct {
+    opcode: Opcode,
+
+    pub fn init(opcode: Opcode) @This() {
+        return .{ .opcode = opcode };
     }
-
-    pub const Kind = enum {
-        block,
-
-        trap,
-        br,
-        br_if,
-        br_table,
-        ret,
-        call,
-        call_indirect,
-        funcref_null,
-        externref_null,
-        ref_func,
-        global_get,
-        global_set,
-        table_get,
-        table_set,
-        table_size,
-        memory_size,
-
-        i32_const,
-        i64_const,
-        f32_const,
-        f64_const,
-        v128_const,
-
-        i32_load,
-        i64_load,
-        f32_load,
-        f64_load,
-        i32_load8_s,
-        i32_load8_u,
-        i32_load16_s,
-        i32_load16_u,
-        i64_load8_s,
-        i64_load8_u,
-        i64_load16_s,
-        i64_load16_u,
-        i64_load32_s,
-        i64_load32_u,
-
-        i32_store,
-        i64_store,
-        f32_store,
-        f64_store,
-        i32_store8,
-        i32_store16,
-        i64_store8,
-        i64_store16,
-        i64_store32,
-
-        v128_load,
-        v128_load_8x8_s,
-        v128_load_8x8_u,
-        v128_load_16x4_s,
-        v128_load_16x4_u,
-        v128_load_32x2_s,
-        v128_load_32x2_u,
-        v128_load8_splat,
-        v128_load16_splat,
-        v128_load32_splat,
-        v128_load64_splat,
-        v128_load32_zero,
-        v128_load64_zero,
-
-        v128_store,
-    };
 };
 
 pub const Block = struct {
-    base: Node = Node.init(.block),
-    start: ?*Node = null,
+    head: ?*Instruction = null,
+    tail: ?*Instruction = null,
+};
 
-    pub fn init() @This() {
-        return .{};
+pub const SequencedInstruction = struct {
+    base: Instruction,
+    prior: ?*Instruction = null,
+    next: ?*Instruction = null,
+
+    pub fn init(opcode: Opcode) @This() {
+        return .{ .base = Instruction.init(opcode) };
     }
 };
 
-pub const SequencedNode = struct {
-    base: Node,
-    prior: *Node,
-    next: ?*Node = null,
-
-    pub fn init(kind: Node.Kind, prior: *Node) @This() {
-        return .{ .base = Node.init(kind), .prior = prior };
-    }
-};
-
-pub const BrNode = struct {
-    base: Node = Node.init(.br),
+pub const Br = struct {
+    base: Instruction = Instruction.init(.br),
     target: *Block,
-    arguments: []*Node,
-
-    pub fn init(target: *Block, arguments: []*Node) @This() {
-        return .{ .target = target, .arguments = arguments };
-    }
+    arguments: []*Instruction,
 };
 
-pub const BrIfNode = struct {
-    base: Node = Node.init(.br_if),
-    condition: *Node,
+pub const BrIf = struct {
+    base: Instruction = Instruction.init(.br_if),
+    condition: *Instruction,
     target: *Block,
-    arguments: []*Node,
-
-    pub fn init(condition: *Node, target: *Block, arguments: []*Node) @This() {
-        return .{
-            .condition = condition,
-            .target = target,
-            .arguments = arguments,
-        };
-    }
+    arguments: []*Instruction,
 };
 
-pub const BrTableNode = struct {
-    base: Node = Node.init(.br_table),
-    index: *Node,
+pub const BrTable = struct {
+    base: Instruction = Instruction.init(.br_table),
+    index: *Instruction,
     cases: []*Block,
     default: *Block,
-
-    pub fn init(index: *Node, cases: []*Block, default: *Block) @This() {
-        return .{
-            .index = index,
-            .cases = cases,
-            .default = default,
-        };
-    }
 };
 
 pub const Ret = struct {
-    base: Node = Node.init(.ret),
-    values: []*Node,
-
-    pub fn init(values: []*Node) @This() {
-        return .{ .values = values };
-    }
+    base: Instruction = Instruction.init(.ret),
+    values: []*Instruction,
 };
 
 pub const Call = struct {
-    base: SequencedNode,
+    base: SequencedInstruction = SequencedInstruction.init(.call),
     callee: wasm.FunctionIndex,
-    arguments: []*Node,
-
-    pub fn init(prior: *Node, callee: wasm.FunctionIndex, arguments: []*Node) @This() {
-        return .{
-            .base = SequencedNode.init(.call, prior),
-            .callee = callee,
-            .arguments = arguments,
-        };
-    }
+    arguments: []*Instruction,
 };
 
 pub const CallIndirect = struct {
-    base: SequencedNode,
+    base: SequencedInstruction = SequencedInstruction.init(.call_indirect),
     callee_type: wasm.TypeIndex,
     table: wasm.TableIndex,
-    index: *Node,
-    arguments: []*Node,
-
-    pub fn init(prior: *Node, callee_type: wasm.TypeIndex, table: wasm.TableIndex, index: *Node, arguments: []*Node) @This() {
-        return .{
-            .base = SequencedNode.init(.call_indirect, prior),
-            .callee_type = callee_type,
-            .table = table,
-            .index = index,
-            .arguments = arguments,
-        };
-    }
+    index: *Instruction,
+    arguments: []*Instruction,
 };
 
 pub const RefFunc = struct {
-    base: Node = Node.init(.ref_func),
+    base: Instruction = Instruction.init(.ref_func),
     function: wasm.FunctionIndex,
-
-    pub fn init(function: wasm.FunctionIndex) @This() {
-        return .{ .function = function };
-    }
 };
 
 pub const GlobalGet = struct {
-    base: SequencedNode,
+    base: SequencedInstruction = SequencedInstruction.init(.global_get),
     global: wasm.GlobalIndex,
+};
 
-    pub fn init(prior: *Node, global: wasm.GlobalIndex) @This() {
+pub const GlobalSet = struct {
+    base: SequencedInstruction = SequencedInstruction.init(.global_set),
+    global: wasm.GlobalIndex,
+    value: *Instruction,
+};
+
+pub const TableGet = struct {
+    base: SequencedInstruction = SequencedInstruction.init(.table_get),
+    table: wasm.TableIndex,
+    index: *Instruction,
+};
+
+pub const TableSet = struct {
+    base: SequencedInstruction = SequencedInstruction.init(.table_set),
+    table: wasm.TableIndex,
+    index: *Instruction,
+    value: *Instruction,
+};
+
+pub const TableSize = struct {
+    base: SequencedInstruction = SequencedInstruction.init(.table_size),
+    table: wasm.TableIndex,
+};
+
+pub const Load = struct {
+    base: SequencedInstruction,
+    address: *Instruction,
+
+    pub fn init(opcode: Opcode, address: *Instruction) @This() {
         return .{
-            .base = SequencedNode.init(.global_get, prior),
-            .global = global,
+            .base = SequencedInstruction.init(opcode),
+            .address = address,
         };
     }
 };
 
-pub const GlobalSet = struct {
-    base: SequencedNode,
-    global: wasm.GlobalIndex,
-    value: *Node,
+pub const Store = struct {
+    base: SequencedInstruction,
+    address: *Instruction,
+    value: *Instruction,
 
-    pub fn init(prior: *Node, global: wasm.GlobalIndex, value: *Node) @This() {
+    pub fn init(opcode: Opcode, address: *Instruction, value: *Instruction) @This() {
         return .{
-            .base = SequencedNode.init(.global_set, prior),
-            .global = global,
+            .base = SequencedInstruction.init(opcode),
+            .address = address,
             .value = value,
         };
     }
 };
 
-pub const TableGet = struct {
-    base: SequencedNode,
-    table: wasm.TableIndex,
-    index: *Node,
-};
-
-pub const TableSet = struct {
-    base: SequencedNode,
-    table: wasm.TableIndex,
-    index: *Node,
-    value: *Node,
-};
-
-pub const TableSize = struct {
-    base: SequencedNode,
-    table: wasm.TableIndex,
-};
-
-pub const Load = struct {
-    base: SequencedNode,
-    address: *Node,
-};
-
-pub const Store = struct {
-    base: SequencedNode,
-    address: *Node,
-    value: *Node,
-};
-
 pub const I32Const = struct {
-    base: Node = Node.init(.i32_const),
+    base: Instruction = Instruction.init(.i32_const),
     value: i32,
-
-    pub fn init(value: i32) @This() {
-        return .{ .value = value };
-    }
 };
 
 pub const I64Const = struct {
-    base: Node = Node.init(.i64_const),
+    base: Instruction = Instruction.init(.i64_const),
     value: i64,
-
-    pub fn init(value: i64) @This() {
-        return .{ .value = value };
-    }
 };
 
 pub const F32Const = struct {
-    base: Node = Node.init(.f32_const),
+    base: Instruction = Instruction.init(.f32_const),
     value: f32,
-
-    pub fn init(value: f32) @This() {
-        return .{ .value = value };
-    }
 };
 
 pub const F64Const = struct {
-    base: Node = Node.init(.f64_const),
+    base: Instruction = Instruction.init(.f64_const),
     value: f64,
-
-    pub fn init(value: f64) @This() {
-        return .{ .value = value };
-    }
 };
 
 pub const V128Const = struct {
-    base: Node = Node.init(.v128_const),
+    base: Instruction = Instruction.init(.v128_const),
     value: u128,
-
-    pub fn init(value: u128) @This() {
-        return .{ .value = value };
-    }
 };
