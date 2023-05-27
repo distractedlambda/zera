@@ -1,3 +1,5 @@
+const std = @import("std");
+
 const Sf = enum(u1) {
     W,
     X,
@@ -139,3 +141,7 @@ const LoadStoreRegisterPair = packed struct(u32) {
         pre_indexed = 0b011,
     };
 };
+
+test "ref all" {
+    std.testing.refAllDeclsRecursive(@This());
+}

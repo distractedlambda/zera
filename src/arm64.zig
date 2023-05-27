@@ -228,3 +228,7 @@ const Local = struct {
 const Function = struct {
     type: wasm.TypeIdx,
 };
+
+test "ref all" {
+    std.testing.refAllDeclsRecursive(@This());
+}

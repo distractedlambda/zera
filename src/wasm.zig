@@ -759,7 +759,7 @@ pub const Decoder = struct {
     pub fn nextGlobalType(self: *@This()) !GlobalType {
         return .{
             .value_type = try self.nextValueType(),
-            .mut = try self.nextMutability(),
+            .mutability = try self.nextMutability(),
         };
     }
 
@@ -800,9 +800,9 @@ pub const Decoder = struct {
 
     pub fn nextImportDesc(self: *@This()) !ImportDesc {
         return switch (try self.nextByte()) {
-            0x00 => .{ .func = try self.nextInt(FunctionIndex) },
+            0x00 => .{ .function = try self.nextInt(FunctionIndex) },
             0x01 => .{ .table = try self.nextTableType() },
-            0x02 => .{ .mem = try self.nextMemoryType() },
+            0x02 => .{ .memory = try self.nextMemoryType() },
             0x03 => .{ .global = try self.nextGlobalType() },
             else => error.UnsupportedImportDesc,
         };

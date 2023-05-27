@@ -579,3 +579,7 @@ pub const PureBinaryOp = struct {
         return .{ .base = Instruction.init(opcode), .lhs = lhs, .rhs = rhs };
     }
 };
+
+test "ref all" {
+    std.testing.refAllDeclsRecursive(@This());
+}
