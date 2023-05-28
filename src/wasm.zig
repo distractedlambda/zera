@@ -567,8 +567,8 @@ pub const ImportedGlobal = struct {
 pub const ConstantExpression = union(enum) {
     i32_const: i32,
     i64_const: i64,
-    f32_const: f32,
-    f64_const: f64,
+    f32_const: u32,
+    f64_const: u64,
     ref_null: void,
     ref_func: FunctionIndex,
     global_get: GlobalIndex,
@@ -598,7 +598,7 @@ pub const Global = struct {
 pub const ExportDesc = union(enum) {
     function: FunctionIndex,
     table: TableIndex,
-    memeory: MemoryIndex,
+    memory: MemoryIndex,
     global: GlobalIndex,
 };
 
@@ -700,7 +700,13 @@ pub const Decoder = struct {
     }
 
     pub fn nextFixedWidth(self: *@This(), comptime T: type) !T {
-        return @bitCast(T, std.mem.readIntLittle(@bitSizeOf(T), try self.nextBytes(comptime @divExact(@bitSizeOf(T), 8))));
+        return @bitCast(
+            T,
+            std.mem.readIntLittle(
+                std.meta.Int(.unsigned, @bitSizeOf(T)),
+                try self.nextBytes(comptime @divExact(@bitSizeOf(T), 8)),
+            ),
+        );
     }
 
     pub fn nextName(self: *@This()) !Name {
@@ -781,29 +787,6 @@ pub const Decoder = struct {
         return .{
             .value_type = try self.nextValueType(),
             .mutability = try self.nextMutability(),
-        };
-    }
-
-    pub fn nextBlockType(self: *@This()) !BlockType {
-        if (self.data.len == 0)
-            return error.UnexpectedEndOfData;
-
-        return switch (self.data[0]) {
-            0x40 => blk: {
-                self.data = self.data[1..];
-                break :blk .{ .immediate = null };
-            },
-
-            0x6f, 0x70, 0x7b...0x7f => |value_type| blk: {
-                self.data = self.data[1..];
-                break :blk .{ .immediate = @intToEnum(ValueType, value_type) };
-            },
-
-            else => blk: {
-                const index = try self.nextInt(i33);
-                if (index < 0) return error.UnsupportedBlockType;
-                break :blk .{ .indexed = @intCast(FunctionIndex, index) };
-            },
         };
     }
 
@@ -974,7 +957,7 @@ pub const ModuleDirectory = struct {
     functions: std.ArrayListUnmanaged(TypeIndex) = .{},
     tables: std.ArrayListUnmanaged(TableType) = .{},
     memories: std.ArrayListUnmanaged(MemoryType) = .{},
-    globals: std.ArrayListUnmanaged(GlobalType) = .{},
+    globals: std.ArrayListUnmanaged(Global) = .{},
     exports: std.ArrayListUnmanaged(Export) = .{},
     start: ?FunctionIndex = null,
     element_segments: std.ArrayListUnmanaged(ElementSegment) = .{},
@@ -1112,6 +1095,8 @@ pub const ModuleDirectory = struct {
             8 => {
                 self.start = try self.nextIndex(&decoder, FunctionIndex);
             },
+
+            else => return error.UnsupportedSection,
         }
     }
 
@@ -1136,7 +1121,7 @@ pub const ModuleDirectory = struct {
                 const len = try decoder.nextInt(u32);
                 try self.function_names.ensureUnusedCapacity(allocator, len);
                 for (0..len) |_| {
-                    const function = try decoder.nextInt(FunctionIndex);
+                    const function = try self.nextIndex(&decoder, FunctionIndex);
                     const function_name = try decoder.nextName();
                     self.function_names.putAssumeCapacity(function, function_name);
                 }
@@ -1145,11 +1130,11 @@ pub const ModuleDirectory = struct {
             2 => {
                 const outer_len = try decoder.nextInt(u32);
                 for (0..outer_len) |_| {
-                    const function = try decoder.nextInt(FunctionIndex);
+                    const function = try self.nextIndex(&decoder, FunctionIndex);
                     const inner_len = try decoder.nextInt(u32);
                     try self.local_names.ensureUnusedCapacity(allocator, inner_len);
                     for (0..inner_len) |_| {
-                        const local = try decoder.nextInt(LocalIndex);
+                        const local = LocalIndex{ .value = try decoder.nextInt(u32) };
                         const name = try decoder.nextName();
                         self.local_names.putAssumeCapacity(.{ function, local }, name);
                     }
@@ -1183,7 +1168,7 @@ pub const ModuleDirectory = struct {
 
     fn nextIndex(self: *@This(), decoder: *Decoder, comptime T: type) !T {
         const idx = T{ .value = try decoder.nextInt(u32) };
-        try self.validateIndex();
+        try self.validateIndex(idx);
         return idx;
     }
 
@@ -1248,7 +1233,7 @@ pub const ModuleDirectory = struct {
             else => return error.UnsupportedConstantExpression,
         };
 
-        if (try self.nextByte() != 0x0b)
+        if (try decoder.nextByte() != 0x0b)
             return error.UnsupportedConstantExpression;
 
         return .{ .type = typ, .initial_value = initial_value };
