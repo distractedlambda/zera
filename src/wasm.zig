@@ -641,8 +641,18 @@ pub const ElementSegment = struct {
 };
 
 pub const DataSegment = struct {
-    active: ?struct { MemoryIndex, u32 },
-    contents: []const u8,
+    mode: Mode,
+    init: []const u8,
+
+    pub const Mode = union(enum) {
+        active: Active,
+        passive: void,
+
+        pub const Active = struct {
+            memory: MemoryIndex,
+            offset: I32ConstantExpression,
+        };
+    };
 };
 
 test "ref all" {

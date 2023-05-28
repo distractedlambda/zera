@@ -54,12 +54,16 @@ pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
 
 fn processModule(self: *@This(), allocator: std.mem.Allocator, data: []const u8) !void {
     var decoder = Decoder.init(data);
+
     while (!decoder.atEnd()) {
         const section_id = try decoder.nextByte();
         const section_len = try decoder.nextInt(u32);
         const section_data = try decoder.nextBytes(section_len);
         try self.processSection(allocator, section_id, section_data);
     }
+
+    if (self.functions.items.len != self.code.items.len)
+        return error.InconsistentFunctionCount;
 }
 
 fn processSection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []const u8) !void {
@@ -155,6 +159,22 @@ fn processSection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []
             const len = try decoder.nextInt(u32);
             try self.element_segments.ensureUnusedCapacity(allocator, len);
             for (0..len) |_| self.element_segments.appendAssumeCapacity(try self.nextElementSegment(allocator, &decoder));
+        },
+
+        10 => {
+            const len = try decoder.nextInt(u32);
+            try self.code.ensureUnusedCapacity(allocator, len);
+            for (0..len) |_| self.code.appendAssumeCapacity(try decoder.nextBytes(try decoder.nextInt(u32)));
+        },
+
+        11 => {
+            const len = try decoder.nextInt(u32);
+            try self.data_segments.ensureUnusedCapacity(allocator, len);
+            for (0..len) |_| self.data_segments.appendAssumeCapacity(try self.nextDataSegment(&decoder));
+        },
+
+        12 => {
+            // Ignore data count section
         },
 
         else => return error.UnsupportedSection,
@@ -458,5 +478,28 @@ fn nextElementSegment(self: *@This(), allocator: std.mem.Allocator, decoder: *De
         },
 
         else => error.UnsupportedElementSegment,
+    };
+}
+
+fn nextDataSegment(self: *@This(), decoder: *Decoder) !wasm.DataSegment {
+    const mode: wasm.DataSegment.Mode = switch (try decoder.nextInt(u32)) {
+        0 => .{ .active = .{
+            .memory = try self.validateIndex(wasm.MemoryIndex{ .value = 0 }),
+            .offset = try self.nextI32ConstantExpression(decoder),
+        } },
+
+        1 => .passive,
+
+        2 => .{ .active = .{
+            .memory = try self.nextIndex(decoder, wasm.MemoryIndex),
+            .offset = try self.nextI32ConstantExpression(decoder),
+        } },
+
+        else => return error.UnsupportedDataSegment,
+    };
+
+    return .{
+        .mode = mode,
+        .init = try decoder.nextByteVector(),
     };
 }

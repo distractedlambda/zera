@@ -84,9 +84,12 @@ pub fn nextFixedWidth(self: *@This(), comptime T: type) !T {
     );
 }
 
-pub fn nextName(self: *@This()) !wasm.Name {
+pub fn nextByteVector(self: *@This()) !wasm.Name {
     return try self.nextBytes(try self.nextInt(u32));
 }
+
+// TODO: validate UTF8?
+pub const nextName = nextByteVector;
 
 pub fn nextNumericType(self: *@This()) !wasm.NumericType {
     return std.meta.intToEnum(wasm.NumericType, try self.nextByte()) catch
