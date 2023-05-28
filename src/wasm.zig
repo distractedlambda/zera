@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const ModuleDirectory = @import("wasm/ModuleDirectory.zig");
+pub const ModuleSummary = @import("wasm/ModuleSummary.zig");
 
 pub const TypeIndex = packed struct(u32) { value: u32 };
 pub const FunctionIndex = packed struct(u32) { value: u32 };
