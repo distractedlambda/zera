@@ -574,6 +574,11 @@ pub const ConstantExpression = union(enum) {
     global_get: GlobalIndex,
 };
 
+pub const I32ConstantExpression = union(enum) {
+    i32_const: i32,
+    global_get: GlobalIndex,
+};
+
 pub const FuncrefConstantExpression = union(enum) {
     ref_null: void,
     ref_func: FunctionIndex,
@@ -612,12 +617,25 @@ pub const ElementSegmentKind = enum(u8) {
 };
 
 pub const ElementSegment = struct {
-    active: ?struct { TableIndex, u32 },
-    contents: union(enum) {
+    mode: Mode,
+    init: Init,
+
+    pub const Mode = union(enum) {
+        active: Active,
+        passive: void,
+        declarative: void,
+
+        pub const Active = struct {
+            table: TableIndex,
+            offset: I32ConstantExpression,
+        };
+    };
+
+    pub const Init = union(enum) {
         funcrefs: []const FunctionIndex,
         funcref_exprs: []const FuncrefConstantExpression,
         externref_exprs: []const ExternrefConstantExpression,
-    },
+    };
 };
 
 pub const DataSegment = struct {
@@ -1096,6 +1114,12 @@ pub const ModuleDirectory = struct {
                 self.start = try self.nextIndex(&decoder, FunctionIndex);
             },
 
+            9 => {
+                const len = try decoder.nextInt(u32);
+                try self.element_segments.ensureUnusedCapacity(allocator, len);
+                for (0..len) |_| self.element_segments.appendAssumeCapacity(try self.nextElementSegment(allocator, &decoder));
+            },
+
             else => return error.UnsupportedSection,
         }
     }
@@ -1145,7 +1169,7 @@ pub const ModuleDirectory = struct {
         }
     }
 
-    fn validateIndex(self: *@This(), idx: anytype) !void {
+    fn validateIndex(self: *@This(), idx: anytype) !@TypeOf(idx) {
         switch (@TypeOf(idx)) {
             TypeIndex => if (idx.value < self.types.items.len)
                 return error.TypeIndexOutOfBounds,
@@ -1164,12 +1188,12 @@ pub const ModuleDirectory = struct {
 
             else => unreachable,
         }
+
+        return idx;
     }
 
     fn nextIndex(self: *@This(), decoder: *Decoder, comptime T: type) !T {
-        const idx = T{ .value = try decoder.nextInt(u32) };
-        try self.validateIndex(idx);
-        return idx;
+        return try self.validateIndex(T{ .value = try decoder.nextInt(u32) });
     }
 
     fn isImport(self: *@This(), idx: anytype) bool {
@@ -1184,59 +1208,67 @@ pub const ModuleDirectory = struct {
         return idx.value < imports_len;
     }
 
-    fn nextGlobal(self: *@This(), decoder: *Decoder) !Global {
-        const typ = try decoder.nextGlobalType();
+    fn nextConstantGlobalGet(self: *@This(), decoder: *Decoder, expected_type: ValueType) !GlobalIndex {
+        const idx = try self.nextIndex(decoder, GlobalIndex);
 
-        const initial_value: ConstantExpression = switch (try decoder.nextByte()) {
-            0x23 => blk: {
-                const idx = try self.nextIndex(decoder, GlobalIndex);
+        if (!self.isImport(idx))
+            return error.UnsupportedConstantExpression;
 
-                if (!self.isImport(idx))
-                    return error.UnsupportedConstantExpression;
+        if (self.imported_globals.items[idx.value].type.value_type != expected_type)
+            return error.TypeMismatch;
 
-                if (self.imported_globals.items[idx.value].type.value_type != typ.value_type)
-                    return error.GlobalInitializerTypeMismatch;
+        return idx;
+    }
 
-                break :blk .{ .global_get = idx };
-            },
+    fn nextConstantExpression(self: *@This(), decoder: *Decoder, expected_type: ValueType) !ConstantExpression {
+        const value: ConstantExpression = switch (try decoder.nextByte()) {
+            opcodes.@"global.get" => .{ .global_get = try self.nextConstantGlobalGet(decoder, expected_type) },
 
-            0x41 => if (typ.value_type == .i32)
+            opcodes.@"i32.const" => if (expected_type == .i32)
                 .{ .i32_const = try decoder.nextInt(i32) }
             else
-                return error.GlobalInitializerTypeMismatch,
+                return error.TypeMismatch,
 
-            0x42 => if (typ.value_type == .i64)
+            opcodes.@"i64.const" => if (expected_type == .i64)
                 .{ .i64_const = try decoder.nextInt(i64) }
             else
-                return error.GlobalInitializerTypeMismatch,
+                return error.TypeMismatch,
 
-            0x43 => if (typ.value_type == .f32)
+            opcodes.@"f32.const" => if (expected_type == .f32)
                 .{ .f32_const = try decoder.nextFixedWidth(u32) }
             else
-                return error.GlobalInitializerTypeMismatch,
+                return error.TypeMismatch,
 
-            0x44 => if (typ.value_type == .f64)
+            opcodes.@"f64.const" => if (expected_type == .f64)
                 .{ .f64_const = try decoder.nextFixedWidth(u64) }
             else
-                return error.GlobalInitializerTypeMismatch,
+                return error.TypeMismatch,
 
-            0xd0 => if (typ.value_type == .funcref or typ.value_type == .externref)
+            opcodes.@"ref.null" => if (expected_type == .funcref or expected_type == .externref)
                 .ref_null
             else
-                return error.GlobalInitializerTypeMismatch,
+                return error.TypeMismatch,
 
-            0xd2 => if (typ.value_type == .funcref)
+            opcodes.@"ref.func" => if (expected_type == .funcref)
                 .{ .ref_func = try self.nextIndex(decoder, FunctionIndex) }
             else
-                return error.GlobalInitializerTypeMismatch,
+                return error.TypeMismatch,
 
             else => return error.UnsupportedConstantExpression,
         };
 
-        if (try decoder.nextByte() != 0x0b)
+        if (try decoder.nextByte() != opcodes.end)
             return error.UnsupportedConstantExpression;
 
-        return .{ .type = typ, .initial_value = initial_value };
+        return value;
+    }
+
+    fn nextGlobal(self: *@This(), decoder: *Decoder) !Global {
+        const typ = try decoder.nextGlobalType();
+        return .{
+            .type = typ,
+            .initial_value = try self.nextConstantExpression(decoder, typ.value_type),
+        };
     }
 
     fn nextExport(self: *@This(), decoder: *Decoder) !Export {
@@ -1252,6 +1284,176 @@ pub const ModuleDirectory = struct {
             },
         };
     }
+
+    fn nextI32ConstantExpression(self: *@This(), decoder: *Decoder) !I32ConstantExpression {
+        const value: I32ConstantExpression = switch (try decoder.nextByte()) {
+            opcodes.@"global.get" => .{ .global_get = try self.nextConstantGlobalGet(decoder, .i32) },
+            opcodes.@"i32.const" => .{ .i32_const = try decoder.nextInt(i32) },
+            else => return error.UnsupportedI32ConstantExpression,
+        };
+
+        if (try decoder.nextByte() != opcodes.end)
+            return error.UnsupportedI32ConstantExpression;
+
+        return value;
+    }
+
+    fn nextFuncrefConstantExpression(self: *@This(), decoder: *Decoder) !FuncrefConstantExpression {
+        const value: FuncrefConstantExpression = switch (try decoder.nextByte()) {
+            opcodes.@"global.get" => .{ .global_get = try self.nextConstantGlobalGet(decoder, .funcref) },
+            opcodes.@"ref.null" => .ref_null,
+            opcodes.@"ref.func" => .{ .ref_func = try self.nextIndex(decoder, FunctionIndex) },
+            else => return error.UnsupportedFuncrefConstantExpression,
+        };
+
+        if (try decoder.nextByte() != opcodes.end)
+            return error.UnsupportedFuncrefConstantExpression;
+
+        return value;
+    }
+
+    fn nextExternrefConstantExpression(self: *@This(), decoder: *Decoder) !ExternrefConstantExpression {
+        const value: ExternrefConstantExpression = switch (try decoder.nextByte()) {
+            opcodes.@"global.get" => .{ .global_get = try self.nextConstantGlobalGet(decoder, .externref) },
+            opcodes.@"ref.null" => .ref_null,
+            else => return error.UnsupportedExternrefConstantExpression,
+        };
+
+        if (try decoder.nextByte() != opcodes.end)
+            return error.UnsupportedExternrefConstantExpression;
+
+        return value;
+    }
+
+    fn nextIndexVector(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder, comptime T: type) ![]const T {
+        const len = try decoder.nextInt(u32);
+        const indices = try allocator.alloc(T, len);
+        errdefer allocator.free(indices);
+        for (indices) |*idx| idx.* = try self.nextIndex(decoder, T);
+        return indices;
+    }
+
+    fn nextFuncrefConstantExpressionVector(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) ![]const FuncrefConstantExpression {
+        const len = try decoder.nextInt(u32);
+        const exprs = try allocator.alloc(FuncrefConstantExpression, len);
+        errdefer allocator.free(exprs);
+        for (exprs) |*expr| expr.* = try self.nextFuncrefConstantExpression(decoder);
+        return exprs;
+    }
+
+    fn nextExternrefConstantExpressionVector(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) ![]const ExternrefConstantExpression {
+        const len = try decoder.nextInt(u32);
+        const exprs = try allocator.alloc(ExternrefConstantExpression, len);
+        errdefer allocator.free(exprs);
+        for (exprs) |*expr| expr.* = try self.nextExternrefConstantExpression(decoder);
+        return exprs;
+    }
+
+    fn nextKindedElementSegmentInit(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) !ElementSegment.Init {
+        return switch (try decoder.nextElementSegmentKind()) {
+            .funcref => .{ .funcrefs = try self.nextIndexVector(allocator, decoder, FunctionIndex) },
+        };
+    }
+
+    fn nextTypedElementSegmentInit(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) !ElementSegment.Init {
+        return switch (try decoder.nextReferenceType()) {
+            .funcref => .{ .funcref_exprs = try self.nextFuncrefConstantExpressionVector(allocator, decoder) },
+            .externref => .{ .externref_exprs = try self.nextExternrefConstantExpressionVector(allocator, decoder) },
+        };
+    }
+
+    fn nextElementSegment(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) !ElementSegment {
+        return switch (try decoder.nextInt(u32)) {
+            0 => .{
+                .mode = .{ .active = .{
+                    .table = try self.validateIndex(TableIndex{ .value = 0 }),
+                    .offset = try self.nextI32ConstantExpression(decoder),
+                } },
+
+                .init = .{ .funcrefs = try self.nextIndexVector(allocator, decoder, FunctionIndex) },
+            },
+
+            1 => .{
+                .mode = .passive,
+                .init = try self.nextKindedElementSegmentInit(allocator, decoder),
+            },
+
+            2 => .{
+                .mode = .{ .active = .{
+                    .table = try self.nextIndex(decoder, TableIndex),
+                    .offset = try self.nextI32ConstantExpression(decoder),
+                } },
+
+                .init = .{ .funcrefs = try self.nextKindedElementSegmentInit(allocator, decoder) },
+            },
+
+            3 => .{
+                .mode = .declarative,
+                .init = .{ .funcrefs = try self.nextKindedElementSegmentInit(allocator, decoder) },
+            },
+
+            4 => .{
+                .mode = .{ .active = .{
+                    .table = try self.validateIndex(TableIndex{ .value = 0 }),
+                    .offset = try self.nextI32ConstantExpression(decoder),
+                } },
+
+                .init = .{ .funcref_exprs = try self.nextFuncrefConstantExpressionVector(allocator, decoder) },
+            },
+
+            5 => .{
+                .mode = .passive,
+                .init = try self.nextTypedElementSegmentInit(allocator, decoder),
+            },
+
+            6 => .{
+                .mode = .{ .active = .{
+                    .table = try self.nextIndex(decoder, TableIndex),
+                    .offset = try self.nextI32ConstantExpression(decoder),
+                } },
+
+                .init = try self.nextTypedElementSegmentInit(allocator, decoder),
+            },
+
+            7 => .{
+                .mode = .declarative,
+                .init = try self.nextTypedElementSegmentInit(allocator, decoder),
+            },
+
+            else => error.UnsupportedElementSegment,
+        };
+    }
+};
+
+pub const opcodes = struct {
+    pub const @"unreachable" = 0x00;
+    pub const nop = 0x01;
+    pub const block = 0x02;
+    pub const loop = 0x03;
+    pub const @"if" = 0x04;
+    pub const @"else" = 0x05;
+    pub const end = 0x0b;
+    pub const br = 0x0c;
+    pub const br_if = 0x0d;
+    pub const br_table = 0x0e;
+    pub const @"return" = 0x0f;
+    pub const call = 0x10;
+    pub const call_indirect = 0x11;
+    pub const @"ref.null" = 0xd0;
+    pub const @"ref.is_null" = 0xd1;
+    pub const @"ref.func" = 0xd2;
+    pub const drop = 0x1a;
+    pub const select = 0x1b;
+    pub const @"select t*" = 0x1c;
+    pub const @"local.get" = 0x20;
+    pub const @"local.set" = 0x21;
+    pub const @"local.tee" = 0x22;
+    pub const @"global.get" = 0x23;
+    pub const @"global.set" = 0x24;
+    pub const @"i32.const" = 0x41;
+    pub const @"i64.const" = 0x42;
+    pub const @"f32.const" = 0x43;
+    pub const @"f64.const" = 0x44;
 };
 
 test "ref all" {
