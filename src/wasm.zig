@@ -1,14 +1,14 @@
 const std = @import("std");
 
-pub const TypeIndex = u32;
-pub const FunctionIndex = u32;
-pub const TableIndex = u32;
-pub const MemoryIndex = u32;
-pub const GlobalIndex = u32;
-pub const ElementSegmentIndex = u32;
-pub const DataSegmentIndex = u32;
-pub const LocalIndex = u32;
-pub const LabelIndex = u32;
+pub const TypeIndex = packed struct(u32) { value: u32 };
+pub const FunctionIndex = packed struct(u32) { value: u32 };
+pub const TableIndex = packed struct(u32) { value: u32 };
+pub const MemoryIndex = packed struct(u32) { value: u32 };
+pub const GlobalIndex = packed struct(u32) { value: u32 };
+pub const ElementSegmentIndex = packed struct(u32) { value: u32 };
+pub const DataSegmentIndex = packed struct(u32) { value: u32 };
+pub const LocalIndex = packed struct(u32) { value: u32 };
+pub const LabelIndex = packed struct(u32) { value: u32 };
 pub const LaneIndex = u8;
 
 pub const SimpleInstruction = enum(u8) {
@@ -574,6 +574,17 @@ pub const ConstantExpression = union(enum) {
     global_get: GlobalIndex,
 };
 
+pub const FuncrefConstantExpression = union(enum) {
+    ref_null: void,
+    ref_func: FunctionIndex,
+    global_get: GlobalIndex,
+};
+
+pub const ExternrefConstantExpression = union(enum) {
+    ref_null: void,
+    global_get: GlobalIndex,
+};
+
 pub const BlockType = union(enum) {
     immediate: ?ValueType,
     indexed: FunctionIndex,
@@ -585,9 +596,9 @@ pub const Global = struct {
 };
 
 pub const ExportDesc = union(enum) {
-    func: FunctionIndex,
+    function: FunctionIndex,
     table: TableIndex,
-    mem: MemoryIndex,
+    memeory: MemoryIndex,
     global: GlobalIndex,
 };
 
@@ -600,15 +611,25 @@ pub const ElementSegmentKind = enum(u8) {
     funcref = 0x00,
 };
 
+pub const ElementSegment = struct {
+    active: ?struct { TableIndex, u32 },
+    contents: union(enum) {
+        funcrefs: []const FunctionIndex,
+        funcref_exprs: []const FuncrefConstantExpression,
+        externref_exprs: []const ExternrefConstantExpression,
+    },
+};
+
+pub const DataSegment = struct {
+    active: ?struct { MemoryIndex, u32 },
+    contents: []const u8,
+};
+
 pub const Decoder = struct {
     data: []const u8,
 
     pub fn init(data: []const u8) @This() {
         return .{ .data = data };
-    }
-
-    pub fn hasRemainingData(self: @This()) bool {
-        return self.data.len != 0;
     }
 
     pub fn atEnd(self: @This()) bool {
@@ -678,9 +699,8 @@ pub const Decoder = struct {
         return error.Overflow;
     }
 
-    pub fn nextFloat(self: *@This(), comptime T: type) !T {
-        const Bits = std.meta.Int(.unsigned, @typeInfo(T).Float.bits);
-        return @bitCast(T, std.mem.readIntLittle(Bits, try self.nextBytes(@sizeOf(T))));
+    pub fn nextFixedWidth(self: *@This(), comptime T: type) !T {
+        return @bitCast(T, std.mem.readIntLittle(@bitSizeOf(T), try self.nextBytes(comptime @divExact(@bitSizeOf(T), 8))));
     }
 
     pub fn nextName(self: *@This()) !Name {
@@ -774,7 +794,7 @@ pub const Decoder = struct {
                 break :blk .{ .immediate = null };
             },
 
-            0x6f, 0x70, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f => |value_type| blk: {
+            0x6f, 0x70, 0x7b...0x7f => |value_type| blk: {
                 self.data = self.data[1..];
                 break :blk .{ .immediate = @intToEnum(ValueType, value_type) };
             },
@@ -784,70 +804,6 @@ pub const Decoder = struct {
                 if (index < 0) return error.UnsupportedBlockType;
                 break :blk .{ .indexed = @intCast(FunctionIndex, index) };
             },
-        };
-    }
-
-    pub fn nextMemoryArgument(self: *@This()) !MemoryArgument {
-        return .{
-            .alignment = try self.nextInt(u32),
-            .offset = try self.nextInt(u32),
-        };
-    }
-
-    pub fn nextImport(self: *@This(), visitor: anytype) !void {
-        const name = ImportName{
-            .module = try self.nextName(),
-            .name = try self.nextName(),
-        };
-
-        return switch (try self.nextByte()) {
-            0x00 => visitor.visitImportedFunction(ImportedFunction{ .name = name, .type = try self.nextInt(TypeIndex) }),
-            0x01 => visitor.visitImportedTable(ImportedTable{ .name = name, .type = try self.nextTableType() }),
-            0x02 => visitor.visitImportedMemory(ImportedMemory{ .name = name, .type = try self.nextMemoryType() }),
-            0x03 => visitor.visitImportedGlobal(ImportedGlobal{ .name = name, .type = try self.nextGlobalType() }),
-            else => error.UnsupportedImport,
-        };
-    }
-
-    pub fn nextConstantExpression(self: *@This()) !ConstantExpression {
-        const value: ConstantExpression = switch (try self.nextByte()) {
-            0x23 => .{ .global_get = try self.nextInt(GlobalIndex) },
-            0x41 => .{ .i32_const = try self.nextInt(i32) },
-            0x42 => .{ .i64_const = try self.nextInt(i64) },
-            0x43 => .{ .f32_const = try self.nextFloat(f32) },
-            0x44 => .{ .f64_const = try self.nextFloat(f64) },
-            0xd0 => .ref_null,
-            0xd2 => .{ .ref_func = try self.nextInt(FunctionIndex) },
-            else => return error.UnsupportedConstantExpression,
-        };
-
-        if (try self.nextByte() != 0x0b)
-            return error.UnsupportedConstantExpression;
-
-        return value;
-    }
-
-    pub fn nextGlobal(self: *@This()) !Global {
-        return .{
-            .type = try self.nextGlobalType(),
-            .initial_value = try self.nextConstantExpression(),
-        };
-    }
-
-    pub fn nextExportDesc(self: *@This()) !ExportDesc {
-        return switch (try self.nextByte()) {
-            0x00 => .{ .func = try self.nextInt(FunctionIndex) },
-            0x01 => .{ .table = try self.nextInt(TableIndex) },
-            0x02 => .{ .mem = try self.nextInt(MemoryIndex) },
-            0x03 => .{ .global = try self.nextInt(GlobalIndex) },
-            else => error.UnsupportedExportDesc,
-        };
-    }
-
-    pub fn nextExport(self: *@This()) !Export {
-        return .{
-            .name = try self.nextName(),
-            .desc = try self.nextExportDesc(),
         };
     }
 
@@ -1007,151 +963,311 @@ pub const Decoder = struct {
             else => return error.UnsupportedInstruction,
         }
     }
+};
 
-    pub fn nextSection(self: *@This(), section_order_bookmark: *u32, visitor: anytype) !void {
-        const id = try self.nextByte();
-        const len = try self.nextInt(u32);
-        const contents = try self.nextBytes(len);
-        var contents_decoder = Decoder.init(contents);
+pub const ModuleDirectory = struct {
+    types: std.ArrayListUnmanaged(FunctionType) = .{},
+    imported_functions: std.ArrayListUnmanaged(ImportedFunction) = .{},
+    imported_tables: std.ArrayListUnmanaged(ImportedTable) = .{},
+    imported_memories: std.ArrayListUnmanaged(ImportedMemory) = .{},
+    imported_globals: std.ArrayListUnmanaged(ImportedGlobal) = .{},
+    functions: std.ArrayListUnmanaged(TypeIndex) = .{},
+    tables: std.ArrayListUnmanaged(TableType) = .{},
+    memories: std.ArrayListUnmanaged(MemoryType) = .{},
+    globals: std.ArrayListUnmanaged(GlobalType) = .{},
+    exports: std.ArrayListUnmanaged(Export) = .{},
+    start: ?FunctionIndex = null,
+    element_segments: std.ArrayListUnmanaged(ElementSegment) = .{},
+    code: std.ArrayListUnmanaged([]const u8) = .{},
+    data_segments: std.ArrayListUnmanaged(DataSegment) = .{},
+    module_name: ?[]const u8 = null,
+    function_names: std.AutoHashMapUnmanaged(FunctionIndex, []const u8) = .{},
+    local_names: std.AutoHashMapUnmanaged(struct { FunctionIndex, LocalIndex }, []const u8) = .{},
 
+    pub fn init(allocator: std.mem.Allocator, module_data: []const u8) !@This() {
+        var directory = @This(){};
+        try directory.processModule(allocator, module_data);
+        return directory;
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        for (self.element_segments.items) |*segment| {
+            switch (segment.contents) {
+                inline else => |contents| allocator.free(contents),
+            }
+        }
+
+        self.types.deinit(allocator);
+        self.imported_functions.deinit(allocator);
+        self.imported_tables.deinit(allocator);
+        self.imported_memories.deinit(allocator);
+        self.imported_globals.deinit(allocator);
+        self.functions.deinit(allocator);
+        self.tables.deinit(allocator);
+        self.memories.deinit(allocator);
+        self.globals.deinit(allocator);
+        self.exports.deinit(allocator);
+        self.element_segments.deinit(allocator);
+        self.code.deinit(allocator);
+        self.data_segments.deinit(allocator);
+        self.function_names.deinit(allocator);
+        self.local_names.deinit(allocator);
+    }
+
+    fn processModule(self: *@This(), allocator: std.mem.Allocator, data: []const u8) !void {
+        var decoder = Decoder.init(data);
+        while (!decoder.atEnd()) {
+            const section_id = try decoder.nextByte();
+            const section_len = try decoder.nextInt(u32);
+            const section_data = try decoder.nextBytes(section_len);
+            try self.processSection(allocator, section_id, section_data);
+        }
+    }
+
+    fn processSection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []const u8) !void {
+        var decoder = Decoder.init(data);
         switch (id) {
             0 => {
-                const name = try contents_decoder.nextName();
-                try visitor.visitCustomSection(name, contents_decoder.remainder());
+                const name = try decoder.nextName();
+                if (std.mem.eql(u8, name, "name")) {
+                    self.processNameSection(allocator, decoder.remainder()) catch |err| {
+                        std.log.err("error parsing 'name' section: {}", .{err});
+                        self.module_name = null;
+                        self.function_names.clearAndFree(allocator);
+                        self.local_names.clearAndFree(allocator);
+                    };
+                }
             },
 
             1 => {
-                if (section_order_bookmark.* > 1) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 1;
-                const num_types = try contents_decoder.nextInt(u32);
-                const type_visitor = try visitor.visitTypeSection(num_types);
-                for (0..num_types) |i| try type_visitor.visitType(i, try contents_decoder.nextFunctionType());
+                const len = try decoder.nextInt(u32);
+                try self.types.ensureUnusedCapacity(allocator, len);
+                for (0..len) |_| self.types.appendAssumeCapacity(try decoder.nextFunctionType());
             },
 
             2 => {
-                if (section_order_bookmark.* > 2) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 2;
-                const num_imports = try contents_decoder.nextInt(u32);
-                const import_visitor = try visitor.visitImportSection(num_imports);
-                for (0..num_imports) |_| try contents_decoder.nextImport(import_visitor);
+                const len = try decoder.nextInt(u32);
+                for (0..len) |_| {
+                    const name = ImportName{
+                        .module = try decoder.nextName(),
+                        .name = try decoder.nextName(),
+                    };
+
+                    switch (try decoder.nextByte()) {
+                        0x00 => try self.imported_functions.append(allocator, .{
+                            .name = name,
+                            .type = try self.nextIndex(&decoder, TypeIndex),
+                        }),
+
+                        0x01 => try self.imported_tables.append(allocator, .{
+                            .name = name,
+                            .type = try decoder.nextTableType(),
+                        }),
+
+                        0x02 => try self.imported_memories.append(allocator, .{
+                            .name = name,
+                            .type = try decoder.nextMemoryType(),
+                        }),
+
+                        0x03 => try self.imported_globals.append(allocator, .{
+                            .name = name,
+                            .type = try decoder.nextGlobalType(),
+                        }),
+
+                        else => return error.UnsupportedImport,
+                    }
+                }
             },
 
             3 => {
-                if (section_order_bookmark.* > 3) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 3;
-                const num_functions = try contents_decoder.nextInt(u32);
-                const function_visitor = try visitor.visitFunctionSection(num_functions);
-                for (0..num_functions) |i| try function_visitor.visitFunction(i, try contents_decoder.nextInt(FunctionIndex));
+                const len = try decoder.nextInt(u32);
+                try self.functions.ensureUnusedCapacity(allocator, len);
+                for (0..len) |_| self.functions.appendAssumeCapacity(try self.nextIndex(&decoder, TypeIndex));
             },
 
             4 => {
-                if (section_order_bookmark.* > 4) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 4;
-                const num_tables = try contents_decoder.nextInt(u32);
-                const table_visitor = try visitor.visitTableSection(num_tables);
-                for (0..num_tables) |i| try table_visitor.visitTable(i, try contents_decoder.nextTableType());
+                const len = try decoder.nextInt(u32);
+                try self.tables.ensureUnusedCapacity(allocator, len);
+                for (0..len) |_| self.tables.appendAssumeCapacity(try decoder.nextTableType());
             },
 
             5 => {
-                if (section_order_bookmark.* > 5) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 5;
-                const num_memories = try contents_decoder.nextInt(u32);
-                const memory_visitor = try visitor.visitMemorySection(num_memories);
-                for (0..num_memories) |i| try memory_visitor.visitMemory(i, try contents_decoder.nextMemoryType());
+                const len = try decoder.nextInt(u32);
+                try self.memories.ensureUnusedCapacity(allocator, len);
+                for (0..len) |_| self.memories.appendAssumeCapacity(try decoder.nextMemoryType());
             },
 
             6 => {
-                if (section_order_bookmark.* > 6) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 6;
-                const num_globals = try contents_decoder.nextInt(u32);
-                const global_visitor = try visitor.visitGlobalSection(num_globals);
-                for (0..num_globals) |i| try global_visitor.visitGlobal(i, try contents_decoder.nextGlobal());
+                const len = try decoder.nextInt(u32);
+                try self.globals.ensureUnusedCapacity(allocator, len);
+                for (0..len) |_| self.globals.appendAssumeCapacity(try self.nextGlobal(&decoder));
             },
 
             7 => {
-                if (section_order_bookmark.* > 7) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 7;
-                const num_exports = try contents_decoder.nextInt(u32);
-                const export_visitor = try visitor.visitExportSection(num_exports);
-                for (0..num_exports) |i| try export_visitor.visitExport(i, try contents_decoder.nextExport());
+                const len = try decoder.nextInt(u32);
+                try self.exports.ensureUnusedCapacity(allocator, len);
+                for (0..len) |_| self.exports.appendAssumeCapacity(try self.nextExport(&decoder));
             },
 
             8 => {
-                if (section_order_bookmark.* > 8) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 9;
-                try visitor.visitStartSection(try contents_decoder.nextInt(FunctionIndex));
-            },
-
-            9 => {
-                if (section_order_bookmark.* > 9) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 9;
-                @panic("TODO handle element sections");
-            },
-
-            10 => {
-                if (section_order_bookmark.* > 10)
-                    return error.UnsupportedSectionOrder;
-
-                if (section_order_bookmark.* < 10) {
-                    section_order_bookmark.* = 10;
-                    try visitor.visitBeforeFirstCodeSection();
-                }
-
-                const num_codes = try contents_decoder.nextInt(u32);
-                const code_visitor = try visitor.visitCodeSection(num_codes);
-                for (0..num_codes) |i| {
-                    const function_code_visitor = try code_visitor.visitFunctionCode(i);
-
-                    const code_size = try contents_decoder.nextInt(u32);
-                    const code_data = try contents_decoder.nextBytes(code_size);
-                    var code_decoder = Decoder.init(code_data);
-
-                    const num_local_groups = try code_decoder.nextInt(u32);
-                    for (0..num_local_groups) |_| {
-                        const group_len = try code_decoder.nextInt(u32);
-                        const group_type = try code_decoder.nextValueType();
-                        try function_code_visitor.visitLocals(group_len, group_type);
-                    }
-
-                    while (code_decoder.hasRemainingData())
-                        try code_decoder.nextInstruction(&function_code_visitor);
-                }
-            },
-
-            11 => {
-                section_order_bookmark.* = 11;
-                @panic("TODO handle data sections");
-            },
-
-            12 => {
-                if (section_order_bookmark.* > 9) return error.UnsupportedSectionOrder;
-                section_order_bookmark.* = 10;
-                try visitor.visitDataCountSection(try contents_decoder.nextInt(u32));
-            },
-
-            else => {
-                return error.UnsupportedSection;
+                self.start = try self.nextIndex(&decoder, FunctionIndex);
             },
         }
+    }
 
-        if (contents_decoder.hasRemainingData()) return error.ExtraDataInSection;
+    fn processNameSection(self: *@This(), allocator: std.mem.Allocator, data: []const u8) !void {
+        var decoder = Decoder.init(data);
+        while (!decoder.atEnd()) {
+            const subsection_id = try decoder.nextByte();
+            const subsection_len = try decoder.nextInt(u32);
+            const subsection_data = try decoder.nextBytes(subsection_len);
+            try self.processNameSubsection(allocator, subsection_id, subsection_data);
+        }
+    }
+
+    fn processNameSubsection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []const u8) !void {
+        var decoder = Decoder.init(data);
+        switch (id) {
+            0 => {
+                self.module_name = try decoder.nextName();
+            },
+
+            1 => {
+                const len = try decoder.nextInt(u32);
+                try self.function_names.ensureUnusedCapacity(allocator, len);
+                for (0..len) |_| {
+                    const function = try decoder.nextInt(FunctionIndex);
+                    const function_name = try decoder.nextName();
+                    self.function_names.putAssumeCapacity(function, function_name);
+                }
+            },
+
+            2 => {
+                const outer_len = try decoder.nextInt(u32);
+                for (0..outer_len) |_| {
+                    const function = try decoder.nextInt(FunctionIndex);
+                    const inner_len = try decoder.nextInt(u32);
+                    try self.local_names.ensureUnusedCapacity(allocator, inner_len);
+                    for (0..inner_len) |_| {
+                        const local = try decoder.nextInt(LocalIndex);
+                        const name = try decoder.nextName();
+                        self.local_names.putAssumeCapacity(.{ function, local }, name);
+                    }
+                }
+            },
+
+            else => {},
+        }
+    }
+
+    fn validateIndex(self: *@This(), idx: anytype) !void {
+        switch (@TypeOf(idx)) {
+            TypeIndex => if (idx.value < self.types.items.len)
+                return error.TypeIndexOutOfBounds,
+
+            FunctionIndex => if (idx.value >= self.imported_functions.items.len and idx.value - self.imported_functions.items.len >= self.functions.items.len)
+                return error.FunctionIndexOutOfBounds,
+
+            TableIndex => if (idx.value >= self.imported_tables.items.len and idx.value - self.imported_tables.items.len >= self.tables.items.len)
+                return error.TableIndexOutOfBounds,
+
+            MemoryIndex => if (idx.value >= self.imported_memories.items.len and idx.value - self.imported_memories.items.len >= self.memories.items.len)
+                return error.MemoryIndexOutOfBounds,
+
+            GlobalIndex => if (idx.value >= self.imported_globals.items.len and idx.value - self.imported_globals.items.len >= self.globals.items.len)
+                return error.GlobalIndexOutOfBounds,
+
+            else => unreachable,
+        }
+    }
+
+    fn nextIndex(self: *@This(), decoder: *Decoder, comptime T: type) !T {
+        const idx = T{ .value = try decoder.nextInt(u32) };
+        try self.validateIndex();
+        return idx;
+    }
+
+    fn isImport(self: *@This(), idx: anytype) bool {
+        const imports_len = switch (@TypeOf(idx)) {
+            FunctionIndex => self.imported_functions.items.len,
+            TableIndex => self.imported_tables.items.len,
+            MemoryIndex => self.imported_memories.items.len,
+            GlobalIndex => self.imported_globals.items.len,
+            else => unreachable,
+        };
+
+        return idx.value < imports_len;
+    }
+
+    fn nextGlobal(self: *@This(), decoder: *Decoder) !Global {
+        const typ = try decoder.nextGlobalType();
+
+        const initial_value: ConstantExpression = switch (try decoder.nextByte()) {
+            0x23 => blk: {
+                const idx = try self.nextIndex(decoder, GlobalIndex);
+
+                if (!self.isImport(idx))
+                    return error.UnsupportedConstantExpression;
+
+                if (self.imported_globals.items[idx.value].type.value_type != typ.value_type)
+                    return error.GlobalInitializerTypeMismatch;
+
+                break :blk .{ .global_get = idx };
+            },
+
+            0x41 => if (typ.value_type == .i32)
+                .{ .i32_const = try decoder.nextInt(i32) }
+            else
+                return error.GlobalInitializerTypeMismatch,
+
+            0x42 => if (typ.value_type == .i64)
+                .{ .i64_const = try decoder.nextInt(i64) }
+            else
+                return error.GlobalInitializerTypeMismatch,
+
+            0x43 => if (typ.value_type == .f32)
+                .{ .f32_const = try decoder.nextFixedWidth(u32) }
+            else
+                return error.GlobalInitializerTypeMismatch,
+
+            0x44 => if (typ.value_type == .f64)
+                .{ .f64_const = try decoder.nextFixedWidth(u64) }
+            else
+                return error.GlobalInitializerTypeMismatch,
+
+            0xd0 => if (typ.value_type == .funcref or typ.value_type == .externref)
+                .ref_null
+            else
+                return error.GlobalInitializerTypeMismatch,
+
+            0xd2 => if (typ.value_type == .funcref)
+                .{ .ref_func = try self.nextIndex(decoder, FunctionIndex) }
+            else
+                return error.GlobalInitializerTypeMismatch,
+
+            else => return error.UnsupportedConstantExpression,
+        };
+
+        if (try self.nextByte() != 0x0b)
+            return error.UnsupportedConstantExpression;
+
+        return .{ .type = typ, .initial_value = initial_value };
+    }
+
+    fn nextExport(self: *@This(), decoder: *Decoder) !Export {
+        return .{
+            .name = try decoder.nextName(),
+
+            .desc = switch (try decoder.nextByte()) {
+                0x00 => .{ .function = try self.nextIndex(decoder, FunctionIndex) },
+                0x01 => .{ .table = try self.nextIndex(decoder, TableIndex) },
+                0x02 => .{ .memory = try self.nextIndex(decoder, MemoryIndex) },
+                0x03 => .{ .global = try self.nextIndex(decoder, GlobalIndex) },
+                else => return error.UnsupportedExport,
+            },
+        };
     }
 };
-
-pub fn visitModule(module_data: []const u8, visitor: anytype) !void {
-    var decoder = Decoder.init(module_data);
-
-    const magic = try decoder.nextBytes(4);
-    if (!std.meta.eql(magic.*, .{ 0x00, 0x61, 0x73, 0x6d }))
-        return error.NotAWasmBinary;
-
-    const version = try decoder.nextBytes(4);
-    if (!std.meta.eql(version.*, .{ 0x01, 0x00, 0x00, 0x00 }))
-        return error.UnsupportedBinaryFormatVersion;
-
-    var section_order_bookmark: u32 = 0;
-    while (decoder.hasRemainingData()) try decoder.nextSection(&section_order_bookmark, visitor);
-}
 
 test "ref all" {
     std.testing.refAllDeclsRecursive(@This());

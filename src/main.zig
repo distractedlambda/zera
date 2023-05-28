@@ -2,7 +2,6 @@ const std = @import("std");
 
 comptime {
     _ = @import("wasm.zig");
-    _ = @import("arm64.zig");
 }
 
 pub fn main() !void {
