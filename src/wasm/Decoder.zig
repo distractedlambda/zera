@@ -91,22 +91,22 @@ pub fn nextByteVector(self: *@This()) !wasm.Name {
 // TODO: validate UTF8?
 pub const nextName = nextByteVector;
 
-pub fn nextNumericType(self: *@This()) !wasm.NumType {
+pub fn nextNumType(self: *@This()) !wasm.NumType {
     return std.meta.intToEnum(wasm.NumType, try self.nextByte()) catch
         error.UnsupportedNumberType;
 }
 
-pub fn nextVectorType(self: *@This()) !wasm.VecType {
+pub fn nextVecType(self: *@This()) !wasm.VecType {
     return std.meta.intToEnum(wasm.VecType, try self.nextByte()) catch
         error.UnsupportedVectorType;
 }
 
-pub fn nextReferenceType(self: *@This()) !wasm.RefType {
+pub fn nextRefType(self: *@This()) !wasm.RefType {
     return std.meta.intToEnum(wasm.RefType, try self.nextByte()) catch
         error.UnsupportedReferenceType;
 }
 
-pub fn nextValueType(self: *@This()) !wasm.ValType {
+pub fn nextValType(self: *@This()) !wasm.ValType {
     return std.meta.intToEnum(wasm.ValType, try self.nextByte()) catch
         error.UnsupportedValueType;
 }
@@ -122,7 +122,7 @@ pub fn nextResultType(self: *@This()) !wasm.ResultType {
     return std.mem.bytesAsSlice(wasm.ValType, types);
 }
 
-pub fn nextFunctionType(self: *@This()) !wasm.FuncType {
+pub fn nextFuncType(self: *@This()) !wasm.FuncType {
     if (try self.nextByte() != 0x60)
         return error.UnsupportedFunctionType;
 
@@ -140,18 +140,18 @@ pub fn nextLimits(self: *@This()) !wasm.Limits {
     };
 }
 
-pub fn nextMemoryType(self: *@This()) !wasm.MemType {
+pub fn nextMemType(self: *@This()) !wasm.MemType {
     return .{ .limits = try self.nextLimits() };
 }
 
 pub fn nextTableType(self: *@This()) !wasm.TableType {
     return .{
-        .element_type = try self.nextReferenceType(),
+        .element_type = try self.nextRefType(),
         .limits = try self.nextLimits(),
     };
 }
 
-pub fn nextMutability(self: *@This()) !wasm.Mut {
+pub fn nextMut(self: *@This()) !wasm.Mut {
     return std.meta.intToEnum(wasm.Mut, try self.nextByte()) catch
         error.UnsupportedMutability;
 }
@@ -163,8 +163,8 @@ pub fn nextElemKind(self: *@This()) !wasm.ElemKind {
 
 pub fn nextGlobalType(self: *@This()) !wasm.GlobalType {
     return .{
-        .value_type = try self.nextValueType(),
-        .mutability = try self.nextMutability(),
+        .value_type = try self.nextValType(),
+        .mutability = try self.nextMut(),
     };
 }
 

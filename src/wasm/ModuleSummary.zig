@@ -93,7 +93,7 @@ fn processSection(self: *@This(), id: u8, data: []const u8) !void {
         1 => {
             const len = try decoder.nextInt(u32);
             try self.types.ensureUnusedCapacity(self.allocator, len);
-            for (0..len) |_| self.types.appendAssumeCapacity(try decoder.nextFunctionType());
+            for (0..len) |_| self.types.appendAssumeCapacity(try decoder.nextFuncType());
         },
 
         2 => {
@@ -117,7 +117,7 @@ fn processSection(self: *@This(), id: u8, data: []const u8) !void {
 
                     0x02 => try self.imported_mems.append(self.allocator, .{
                         .name = name,
-                        .type = try decoder.nextMemoryType(),
+                        .type = try decoder.nextMemType(),
                     }),
 
                     0x03 => try self.imported_globals.append(self.allocator, .{
@@ -145,7 +145,7 @@ fn processSection(self: *@This(), id: u8, data: []const u8) !void {
         5 => {
             const len = try decoder.nextInt(u32);
             try self.mems.ensureUnusedCapacity(self.allocator, len);
-            for (0..len) |_| self.mems.appendAssumeCapacity(try decoder.nextMemoryType());
+            for (0..len) |_| self.mems.appendAssumeCapacity(try decoder.nextMemType());
         },
 
         6 => {
@@ -422,7 +422,7 @@ fn nextKindedElemInit(self: *@This(), decoder: *Decoder) !wasm.Elem.Init {
 }
 
 fn nextTypedElemInit(self: *@This(), decoder: *Decoder) !wasm.Elem.Init {
-    return switch (try decoder.nextReferenceType()) {
+    return switch (try decoder.nextRefType()) {
         .funcref => .{ .funcref_exprs = try self.nextFuncrefConstantExprVector(decoder) },
         .externref => .{ .externref_exprs = try self.nextExternrefConstantExprVector(decoder) },
     };
