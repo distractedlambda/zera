@@ -503,3 +503,26 @@ fn nextDataSegment(self: *@This(), decoder: *Decoder) !wasm.DataSegment {
         .init = try decoder.nextByteVector(),
     };
 }
+
+test "ref all decls" {
+    std.testing.refAllDecls(@This());
+}
+
+test "summarize test modules" {
+    for (@import("../test_modules/manifest.zig").module_names) |name| {
+        for (std.meta.tags(std.builtin.OptimizeMode)) |mode| {
+            const module_path = try std.fmt.allocPrint(
+                std.testing.allocator,
+                "test_modules/{s}-{s}.wasm",
+                .{ name, @tagName(mode) },
+            );
+            defer std.testing.allocator.free(module_path);
+
+            const mapping = try @import("../ReadOnlyFileMapping.zig").open(module_path);
+            defer mapping.deinit();
+
+            var summary = try init(std.testing.allocator, mapping.contents);
+            defer summary.deinit(std.testing.allocator);
+        }
+    }
+}

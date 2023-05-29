@@ -167,3 +167,7 @@ pub fn nextGlobalType(self: *@This()) !wasm.GlobalType {
         .mutability = try self.nextMutability(),
     };
 }
+
+ test "ref all decls" {
+    std.testing.refAllDecls(@This());
+ }

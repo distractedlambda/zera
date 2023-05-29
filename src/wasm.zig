@@ -1,16 +1,41 @@
-const std = @import("std");
-
 pub const ModuleSummary = @import("wasm/ModuleSummary.zig");
 
-pub const TypeIndex = packed struct(u32) { value: u32 };
-pub const FunctionIndex = packed struct(u32) { value: u32 };
-pub const TableIndex = packed struct(u32) { value: u32 };
-pub const MemoryIndex = packed struct(u32) { value: u32 };
-pub const GlobalIndex = packed struct(u32) { value: u32 };
-pub const ElementSegmentIndex = packed struct(u32) { value: u32 };
-pub const DataSegmentIndex = packed struct(u32) { value: u32 };
-pub const LocalIndex = packed struct(u32) { value: u32 };
-pub const LabelIndex = packed struct(u32) { value: u32 };
+pub const TypeIndex = packed struct(u32) {
+    value: u32,
+};
+
+pub const FunctionIndex = packed struct(u32) {
+    value: u32,
+};
+
+pub const TableIndex = packed struct(u32) {
+    value: u32,
+};
+
+pub const MemoryIndex = packed struct(u32) {
+    value: u32,
+};
+
+pub const GlobalIndex = packed struct(u32) {
+    value: u32,
+};
+
+pub const ElementSegmentIndex = packed struct(u32) {
+    value: u32,
+};
+
+pub const DataSegmentIndex = packed struct(u32) {
+    value: u32,
+};
+
+pub const LocalIndex = packed struct(u32) {
+    value: u32,
+};
+
+pub const LabelIndex = packed struct(u32) {
+    value: u32,
+};
+
 pub const LaneIndex = u8;
 
 pub const SimpleInstruction = enum(u8) {
@@ -655,6 +680,12 @@ pub const DataSegment = struct {
     };
 };
 
-test "ref all" {
-    std.testing.refAllDeclsRecursive(@This());
+test {
+    _ = @import("wasm/Decoder.zig");
+    _ = @import("wasm/ModuleSummary.zig");
+    _ = @import("wasm/opcodes.zig");
+}
+
+test "ref all decls" {
+    @import("std").testing.refAllDecls(@This());
 }

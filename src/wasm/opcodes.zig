@@ -26,3 +26,7 @@ pub const @"i32.const" = 0x41;
 pub const @"i64.const" = 0x42;
 pub const @"f32.const" = 0x43;
 pub const @"f64.const" = 0x44;
+
+test "ref all decls" {
+    @import("std").testing.refAllDecls(@This());
+}
