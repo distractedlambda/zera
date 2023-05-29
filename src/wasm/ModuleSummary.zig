@@ -6,23 +6,23 @@ const Decoder = @import("Decoder.zig");
 
 allocator: std.mem.Allocator,
 
-types: std.ArrayListUnmanaged(wasm.FunctionType) = .{},
-imported_functions: std.ArrayListUnmanaged(wasm.ImportedFunction) = .{},
+types: std.ArrayListUnmanaged(wasm.FuncType) = .{},
+imported_functions: std.ArrayListUnmanaged(wasm.ImportedFunc) = .{},
 imported_tables: std.ArrayListUnmanaged(wasm.ImportedTable) = .{},
-imported_memories: std.ArrayListUnmanaged(wasm.ImportedMemory) = .{},
+imported_memories: std.ArrayListUnmanaged(wasm.ImportedMem) = .{},
 imported_globals: std.ArrayListUnmanaged(wasm.ImportedGlobal) = .{},
-functions: std.ArrayListUnmanaged(wasm.TypeIndex) = .{},
+functions: std.ArrayListUnmanaged(wasm.TypeIdx) = .{},
 tables: std.ArrayListUnmanaged(wasm.TableType) = .{},
-memories: std.ArrayListUnmanaged(wasm.MemoryType) = .{},
+memories: std.ArrayListUnmanaged(wasm.MemType) = .{},
 globals: std.ArrayListUnmanaged(wasm.Global) = .{},
 exports: std.ArrayListUnmanaged(wasm.Export) = .{},
-start: ?wasm.FunctionIndex = null,
-element_segments: std.ArrayListUnmanaged(wasm.ElementSegment) = .{},
+start: ?wasm.FuncIdx = null,
+element_segments: std.ArrayListUnmanaged(wasm.Elem) = .{},
 code: std.ArrayListUnmanaged([]const u8) = .{},
-data_segments: std.ArrayListUnmanaged(wasm.DataSegment) = .{},
+data_segments: std.ArrayListUnmanaged(wasm.Data) = .{},
 module_name: ?[]const u8 = null,
-function_names: std.AutoHashMapUnmanaged(wasm.FunctionIndex, []const u8) = .{},
-local_names: std.AutoHashMapUnmanaged(struct { wasm.FunctionIndex, wasm.LocalIndex }, []const u8) = .{},
+function_names: std.AutoHashMapUnmanaged(wasm.FuncIdx, []const u8) = .{},
+local_names: std.AutoHashMapUnmanaged(struct { wasm.FuncIdx, wasm.LocalIdx }, []const u8) = .{},
 
 pub fn init(allocator: std.mem.Allocator, module_data: []const u8) !@This() {
     var directory = @This(){ .allocator = allocator };
@@ -107,7 +107,7 @@ fn processSection(self: *@This(), id: u8, data: []const u8) !void {
                 switch (try decoder.nextByte()) {
                     0x00 => try self.imported_functions.append(self.allocator, .{
                         .name = name,
-                        .type = try self.nextIndex(&decoder, wasm.TypeIndex),
+                        .type = try self.nextIndex(&decoder, wasm.TypeIdx),
                     }),
 
                     0x01 => try self.imported_tables.append(self.allocator, .{
@@ -133,7 +133,7 @@ fn processSection(self: *@This(), id: u8, data: []const u8) !void {
         3 => {
             const len = try decoder.nextInt(u32);
             try self.functions.ensureUnusedCapacity(self.allocator, len);
-            for (0..len) |_| self.functions.appendAssumeCapacity(try self.nextIndex(&decoder, wasm.TypeIndex));
+            for (0..len) |_| self.functions.appendAssumeCapacity(try self.nextIndex(&decoder, wasm.TypeIdx));
         },
 
         4 => {
@@ -161,7 +161,7 @@ fn processSection(self: *@This(), id: u8, data: []const u8) !void {
         },
 
         8 => {
-            self.start = try self.nextIndex(&decoder, wasm.FunctionIndex);
+            self.start = try self.nextIndex(&decoder, wasm.FuncIdx);
         },
 
         9 => {
@@ -211,7 +211,7 @@ fn processNameSubsection(self: *@This(), id: u8, data: []const u8) !void {
             const len = try decoder.nextInt(u32);
             try self.function_names.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| {
-                const function = try self.nextIndex(&decoder, wasm.FunctionIndex);
+                const function = try self.nextIndex(&decoder, wasm.FuncIdx);
                 const function_name = try decoder.nextName();
                 self.function_names.putAssumeCapacity(function, function_name);
             }
@@ -220,11 +220,11 @@ fn processNameSubsection(self: *@This(), id: u8, data: []const u8) !void {
         2 => {
             const outer_len = try decoder.nextInt(u32);
             for (0..outer_len) |_| {
-                const function = try self.nextIndex(&decoder, wasm.FunctionIndex);
+                const function = try self.nextIndex(&decoder, wasm.FuncIdx);
                 const inner_len = try decoder.nextInt(u32);
                 try self.local_names.ensureUnusedCapacity(self.allocator, inner_len);
                 for (0..inner_len) |_| {
-                    const local = wasm.LocalIndex{ .value = try decoder.nextInt(u32) };
+                    const local = wasm.LocalIdx{ .value = try decoder.nextInt(u32) };
                     const name = try decoder.nextName();
                     self.local_names.putAssumeCapacity(.{ function, local }, name);
                 }
@@ -237,19 +237,19 @@ fn processNameSubsection(self: *@This(), id: u8, data: []const u8) !void {
 
 pub fn validateIndex(self: *const @This(), idx: anytype) !@TypeOf(idx) {
     switch (@TypeOf(idx)) {
-        wasm.TypeIndex => if (idx.value >= self.types.items.len)
+        wasm.TypeIdx => if (idx.value >= self.types.items.len)
             return error.TypeIndexOutOfBounds,
 
-        wasm.FunctionIndex => if (idx.value >= self.imported_functions.items.len and idx.value - self.imported_functions.items.len >= self.functions.items.len)
+        wasm.FuncIdx => if (idx.value >= self.imported_functions.items.len and idx.value - self.imported_functions.items.len >= self.functions.items.len)
             return error.FunctionIndexOutOfBounds,
 
-        wasm.TableIndex => if (idx.value >= self.imported_tables.items.len and idx.value - self.imported_tables.items.len >= self.tables.items.len)
+        wasm.TableIdx => if (idx.value >= self.imported_tables.items.len and idx.value - self.imported_tables.items.len >= self.tables.items.len)
             return error.TableIndexOutOfBounds,
 
-        wasm.MemoryIndex => if (idx.value >= self.imported_memories.items.len and idx.value - self.imported_memories.items.len >= self.memories.items.len)
+        wasm.MemIdx => if (idx.value >= self.imported_memories.items.len and idx.value - self.imported_memories.items.len >= self.memories.items.len)
             return error.MemoryIndexOutOfBounds,
 
-        wasm.GlobalIndex => if (idx.value >= self.imported_globals.items.len and idx.value - self.imported_globals.items.len >= self.globals.items.len)
+        wasm.GlobalIdx => if (idx.value >= self.imported_globals.items.len and idx.value - self.imported_globals.items.len >= self.globals.items.len)
             return error.GlobalIndexOutOfBounds,
 
         else => @compileError("invalid index type: " ++ @typeName(@TypeOf(idx))),
@@ -264,18 +264,18 @@ pub fn nextIndex(self: *const @This(), decoder: *Decoder, comptime T: type) !T {
 
 pub fn isImport(self: *const @This(), idx: anytype) bool {
     const imports_len = switch (@TypeOf(idx)) {
-        wasm.FunctionIndex => self.imported_functions.items.len,
-        wasm.TableIndex => self.imported_tables.items.len,
-        wasm.MemoryIndex => self.imported_memories.items.len,
-        wasm.GlobalIndex => self.imported_globals.items.len,
+        wasm.FuncIdx => self.imported_functions.items.len,
+        wasm.TableIdx => self.imported_tables.items.len,
+        wasm.MemIdx => self.imported_memories.items.len,
+        wasm.GlobalIdx => self.imported_globals.items.len,
         else => @compileError("invalid index type: " ++ @typeName(@TypeOf(idx))),
     };
 
     return idx.value < imports_len;
 }
 
-fn nextConstantGlobalGet(self: *const @This(), decoder: *Decoder, expected_type: wasm.ValueType) !wasm.GlobalIndex {
-    const idx = try self.nextIndex(decoder, wasm.GlobalIndex);
+fn nextConstantGlobalGet(self: *const @This(), decoder: *Decoder, expected_type: wasm.ValType) !wasm.GlobalIdx {
+    const idx = try self.nextIndex(decoder, wasm.GlobalIdx);
 
     if (!self.isImport(idx))
         return error.UnsupportedConstantExpression;
@@ -286,8 +286,8 @@ fn nextConstantGlobalGet(self: *const @This(), decoder: *Decoder, expected_type:
     return idx;
 }
 
-fn nextConstantExpression(self: *@This(), decoder: *Decoder, expected_type: wasm.ValueType) !wasm.ConstantExpression {
-    const value: wasm.ConstantExpression = switch (try decoder.nextByte()) {
+fn nextConstantExpression(self: *@This(), decoder: *Decoder, expected_type: wasm.ValType) !wasm.ConstantExpr {
+    const value: wasm.ConstantExpr = switch (try decoder.nextByte()) {
         opcodes.@"global.get" => .{ .global_get = try self.nextConstantGlobalGet(decoder, expected_type) },
 
         opcodes.@"i32.const" => if (expected_type == .i32)
@@ -316,7 +316,7 @@ fn nextConstantExpression(self: *@This(), decoder: *Decoder, expected_type: wasm
             return error.TypeMismatch,
 
         opcodes.@"ref.func" => if (expected_type == .funcref)
-            .{ .ref_func = try self.nextIndex(decoder, wasm.FunctionIndex) }
+            .{ .ref_func = try self.nextIndex(decoder, wasm.FuncIdx) }
         else
             return error.TypeMismatch,
 
@@ -342,17 +342,17 @@ fn nextExport(self: *@This(), decoder: *Decoder) !wasm.Export {
         .name = try decoder.nextName(),
 
         .desc = switch (try decoder.nextByte()) {
-            0x00 => .{ .function = try self.nextIndex(decoder, wasm.FunctionIndex) },
-            0x01 => .{ .table = try self.nextIndex(decoder, wasm.TableIndex) },
-            0x02 => .{ .memory = try self.nextIndex(decoder, wasm.MemoryIndex) },
-            0x03 => .{ .global = try self.nextIndex(decoder, wasm.GlobalIndex) },
+            0x00 => .{ .function = try self.nextIndex(decoder, wasm.FuncIdx) },
+            0x01 => .{ .table = try self.nextIndex(decoder, wasm.TableIdx) },
+            0x02 => .{ .memory = try self.nextIndex(decoder, wasm.MemIdx) },
+            0x03 => .{ .global = try self.nextIndex(decoder, wasm.GlobalIdx) },
             else => return error.UnsupportedExport,
         },
     };
 }
 
-fn nextI32ConstantExpression(self: *@This(), decoder: *Decoder) !wasm.I32ConstantExpression {
-    const value: wasm.I32ConstantExpression = switch (try decoder.nextByte()) {
+fn nextI32ConstantExpression(self: *@This(), decoder: *Decoder) !wasm.I32ConstantExpr {
+    const value: wasm.I32ConstantExpr = switch (try decoder.nextByte()) {
         opcodes.@"global.get" => .{ .global_get = try self.nextConstantGlobalGet(decoder, .i32) },
         opcodes.@"i32.const" => .{ .i32_const = try decoder.nextInt(i32) },
         else => return error.UnsupportedI32ConstantExpression,
@@ -364,11 +364,11 @@ fn nextI32ConstantExpression(self: *@This(), decoder: *Decoder) !wasm.I32Constan
     return value;
 }
 
-fn nextFuncrefConstantExpression(self: *@This(), decoder: *Decoder) !wasm.FuncrefConstantExpression {
-    const value: wasm.FuncrefConstantExpression = switch (try decoder.nextByte()) {
+fn nextFuncrefConstantExpression(self: *@This(), decoder: *Decoder) !wasm.FuncrefConstantExpr {
+    const value: wasm.FuncrefConstantExpr = switch (try decoder.nextByte()) {
         opcodes.@"global.get" => .{ .global_get = try self.nextConstantGlobalGet(decoder, .funcref) },
         opcodes.@"ref.null" => .ref_null,
-        opcodes.@"ref.func" => .{ .ref_func = try self.nextIndex(decoder, wasm.FunctionIndex) },
+        opcodes.@"ref.func" => .{ .ref_func = try self.nextIndex(decoder, wasm.FuncIdx) },
         else => return error.UnsupportedFuncrefConstantExpression,
     };
 
@@ -378,8 +378,8 @@ fn nextFuncrefConstantExpression(self: *@This(), decoder: *Decoder) !wasm.Funcre
     return value;
 }
 
-fn nextExternrefConstantExpression(self: *@This(), decoder: *Decoder) !wasm.ExternrefConstantExpression {
-    const value: wasm.ExternrefConstantExpression = switch (try decoder.nextByte()) {
+fn nextExternrefConstantExpression(self: *@This(), decoder: *Decoder) !wasm.ExternrefConstantExpr {
+    const value: wasm.ExternrefConstantExpr = switch (try decoder.nextByte()) {
         opcodes.@"global.get" => .{ .global_get = try self.nextConstantGlobalGet(decoder, .externref) },
         opcodes.@"ref.null" => .ref_null,
         else => return error.UnsupportedExternrefConstantExpression,
@@ -399,44 +399,44 @@ fn nextIndexVector(self: *@This(), decoder: *Decoder, comptime T: type) ![]const
     return indices;
 }
 
-fn nextFuncrefConstantExpressionVector(self: *@This(), decoder: *Decoder) ![]const wasm.FuncrefConstantExpression {
+fn nextFuncrefConstantExpressionVector(self: *@This(), decoder: *Decoder) ![]const wasm.FuncrefConstantExpr {
     const len = try decoder.nextInt(u32);
-    const exprs = try self.allocator.alloc(wasm.FuncrefConstantExpression, len);
+    const exprs = try self.allocator.alloc(wasm.FuncrefConstantExpr, len);
     errdefer self.allocator.free(exprs);
     for (exprs) |*expr| expr.* = try self.nextFuncrefConstantExpression(decoder);
     return exprs;
 }
 
-fn nextExternrefConstantExpressionVector(self: *@This(), decoder: *Decoder) ![]const wasm.ExternrefConstantExpression {
+fn nextExternrefConstantExpressionVector(self: *@This(), decoder: *Decoder) ![]const wasm.ExternrefConstantExpr {
     const len = try decoder.nextInt(u32);
-    const exprs = try self.allocator.alloc(wasm.ExternrefConstantExpression, len);
+    const exprs = try self.allocator.alloc(wasm.ExternrefConstantExpr, len);
     errdefer self.allocator.free(exprs);
     for (exprs) |*expr| expr.* = try self.nextExternrefConstantExpression(decoder);
     return exprs;
 }
 
-fn nextKindedElementSegmentInit(self: *@This(), decoder: *Decoder) !wasm.ElementSegment.Init {
+fn nextKindedElementSegmentInit(self: *@This(), decoder: *Decoder) !wasm.Elem.Init {
     return switch (try decoder.nextElemKind()) {
-        .funcref => .{ .funcrefs = try self.nextIndexVector(decoder, wasm.FunctionIndex) },
+        .funcref => .{ .funcrefs = try self.nextIndexVector(decoder, wasm.FuncIdx) },
     };
 }
 
-fn nextTypedElementSegmentInit(self: *@This(), decoder: *Decoder) !wasm.ElementSegment.Init {
+fn nextTypedElementSegmentInit(self: *@This(), decoder: *Decoder) !wasm.Elem.Init {
     return switch (try decoder.nextReferenceType()) {
         .funcref => .{ .funcref_exprs = try self.nextFuncrefConstantExpressionVector(decoder) },
         .externref => .{ .externref_exprs = try self.nextExternrefConstantExpressionVector(decoder) },
     };
 }
 
-fn nextElementSegment(self: *@This(), decoder: *Decoder) !wasm.ElementSegment {
+fn nextElementSegment(self: *@This(), decoder: *Decoder) !wasm.Elem {
     return switch (try decoder.nextInt(u32)) {
         0 => .{
             .mode = .{ .active = .{
-                .table = try self.validateIndex(wasm.TableIndex{ .value = 0 }),
+                .table = try self.validateIndex(wasm.TableIdx{ .value = 0 }),
                 .offset = try self.nextI32ConstantExpression(decoder),
             } },
 
-            .init = .{ .funcrefs = try self.nextIndexVector(decoder, wasm.FunctionIndex) },
+            .init = .{ .funcrefs = try self.nextIndexVector(decoder, wasm.FuncIdx) },
         },
 
         1 => .{
@@ -446,7 +446,7 @@ fn nextElementSegment(self: *@This(), decoder: *Decoder) !wasm.ElementSegment {
 
         2 => .{
             .mode = .{ .active = .{
-                .table = try self.nextIndex(decoder, wasm.TableIndex),
+                .table = try self.nextIndex(decoder, wasm.TableIdx),
                 .offset = try self.nextI32ConstantExpression(decoder),
             } },
 
@@ -460,7 +460,7 @@ fn nextElementSegment(self: *@This(), decoder: *Decoder) !wasm.ElementSegment {
 
         4 => .{
             .mode = .{ .active = .{
-                .table = try self.validateIndex(wasm.TableIndex{ .value = 0 }),
+                .table = try self.validateIndex(wasm.TableIdx{ .value = 0 }),
                 .offset = try self.nextI32ConstantExpression(decoder),
             } },
 
@@ -474,7 +474,7 @@ fn nextElementSegment(self: *@This(), decoder: *Decoder) !wasm.ElementSegment {
 
         6 => .{
             .mode = .{ .active = .{
-                .table = try self.nextIndex(decoder, wasm.TableIndex),
+                .table = try self.nextIndex(decoder, wasm.TableIdx),
                 .offset = try self.nextI32ConstantExpression(decoder),
             } },
 
@@ -490,17 +490,17 @@ fn nextElementSegment(self: *@This(), decoder: *Decoder) !wasm.ElementSegment {
     };
 }
 
-fn nextDataSegment(self: *@This(), decoder: *Decoder) !wasm.DataSegment {
-    const mode: wasm.DataSegment.Mode = switch (try decoder.nextInt(u32)) {
+fn nextDataSegment(self: *@This(), decoder: *Decoder) !wasm.Data {
+    const mode: wasm.Data.Mode = switch (try decoder.nextInt(u32)) {
         0 => .{ .active = .{
-            .memory = try self.validateIndex(wasm.MemoryIndex{ .value = 0 }),
+            .memory = try self.validateIndex(wasm.MemIdx{ .value = 0 }),
             .offset = try self.nextI32ConstantExpression(decoder),
         } },
 
         1 => .passive,
 
         2 => .{ .active = .{
-            .memory = try self.nextIndex(decoder, wasm.MemoryIndex),
+            .memory = try self.nextIndex(decoder, wasm.MemIdx),
             .offset = try self.nextI32ConstantExpression(decoder),
         } },
 
@@ -521,32 +521,32 @@ pub fn ImportedOrDeclared(comptime Imported: type, comptime Declared: type) type
 }
 
 pub fn lookUp(self: *const @This(), idx: anytype) switch (@TypeOf(idx)) {
-    wasm.TypeIndex => wasm.FunctionType,
-    wasm.FunctionIndex => ImportedOrDeclared(wasm.ImportedFunction, wasm.TypeIndex),
-    wasm.TableIndex => ImportedOrDeclared(wasm.ImportedTable, wasm.TableType),
-    wasm.MemoryIndex => ImportedOrDeclared(wasm.ImportedMemory, wasm.MemoryType),
-    wasm.GlobalIndex => ImportedOrDeclared(wasm.ImportedGlobal, wasm.GlobalType),
+    wasm.TypeIdx => wasm.FuncType,
+    wasm.FuncIdx => ImportedOrDeclared(wasm.ImportedFunc, wasm.TypeIdx),
+    wasm.TableIdx => ImportedOrDeclared(wasm.ImportedTable, wasm.TableType),
+    wasm.MemIdx => ImportedOrDeclared(wasm.ImportedMem, wasm.MemType),
+    wasm.GlobalIdx => ImportedOrDeclared(wasm.ImportedGlobal, wasm.GlobalType),
     else => @compileError("invalid index type: " ++ @typeName(@TypeOf(idx))),
 } {
     return switch (@TypeOf(idx)) {
-        wasm.TypeIndex => self.types.items[idx.value],
+        wasm.TypeIdx => self.types.items[idx.value],
 
-        wasm.FunctionIndex => if (self.isImport(idx))
+        wasm.FuncIdx => if (self.isImport(idx))
             .{ .imported = self.imported_functions.items[idx.value] }
         else
             .{ .declared = self.functions.items[idx.value - self.imported_functions.items.len] },
 
-        wasm.TableIndex => if (self.isImport(idx))
+        wasm.TableIdx => if (self.isImport(idx))
             .{ .imported = self.imported_tables.items[idx.value] }
         else
             .{ .declared = self.tables.items[idx.value - self.imported_tables.items.len] },
 
-        wasm.MemoryIndex => if (self.isImport(idx))
+        wasm.MemIdx => if (self.isImport(idx))
             .{ .imported = self.imported_memories.items[idx.value] }
         else
             .{ .declared = self.memories.items[idx.value - self.imported_memories.items.len] },
 
-        wasm.GlobalIndex => if (self.isImport(idx))
+        wasm.GlobalIdx => if (self.isImport(idx))
             .{ .imported = self.imported_globals.items[idx.value] }
         else
             .{ .declared = self.globals.items[idx.value - self.imported_globals.items.len] },
@@ -556,19 +556,19 @@ pub fn lookUp(self: *const @This(), idx: anytype) switch (@TypeOf(idx)) {
 }
 
 pub fn lookUpType(self: *const @This(), idx: anytype) switch (@TypeOf(idx)) {
-    wasm.FunctionIndex => wasm.FunctionType,
-    wasm.TableIndex => wasm.TableType,
-    wasm.MemoryIndex => wasm.MemoryType,
-    wasm.GlobalIndex => wasm.GlobalType,
+    wasm.FuncIdx => wasm.FuncType,
+    wasm.TableIdx => wasm.TableType,
+    wasm.MemIdx => wasm.MemType,
+    wasm.GlobalIdx => wasm.GlobalType,
     else => @compileError("invalid index type: " ++ @typeName(@TypeOf(idx))),
 } {
     return switch (@TypeOf(idx)) {
-        wasm.FunctionIndex => self.lookUp(switch (self.lookUp(idx)) {
+        wasm.FuncIdx => self.lookUp(switch (self.lookUp(idx)) {
             .imported => |import| import.type,
             .declared => |type_idx| type_idx,
         }),
 
-        inline wasm.TableIndex, wasm.MemoryIndex, wasm.GlobalIndex => switch (self.lookUp(idx)) {
+        inline wasm.TableIdx, wasm.MemIdx, wasm.GlobalIdx => switch (self.lookUp(idx)) {
             .imported => |import| import.type,
             .declared => |t| t,
         },

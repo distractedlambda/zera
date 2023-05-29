@@ -1,42 +1,42 @@
 pub const ModuleSummary = @import("wasm/ModuleSummary.zig");
 
-pub const TypeIndex = packed struct(u32) {
+pub const TypeIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const FunctionIndex = packed struct(u32) {
+pub const FuncIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const TableIndex = packed struct(u32) {
+pub const TableIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const MemoryIndex = packed struct(u32) {
+pub const MemIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const GlobalIndex = packed struct(u32) {
+pub const GlobalIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const ElementSegmentIndex = packed struct(u32) {
+pub const ElemIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const DataSegmentIndex = packed struct(u32) {
+pub const DataIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const LocalIndex = packed struct(u32) {
+pub const LocalIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const LabelIndex = packed struct(u32) {
+pub const LabelIdx = packed struct(u32) {
     value: u32,
 };
 
-pub const LaneIndex = u8;
+pub const LaneIdx = u8;
 
 pub const SimpleInstruction = enum(u8) {
     @"unreachable" = 0x00,
@@ -502,23 +502,23 @@ pub const VectorMemoryLaneInstruction = enum(u32) {
     v128_store64_lane,
 };
 
-pub const NumericType = enum(u8) {
+pub const NumType = enum(u8) {
     i32 = 0x7f,
     i64 = 0x7e,
     f32 = 0x7d,
     f64 = 0x7c,
 };
 
-pub const VectorType = enum(u8) {
+pub const VecType = enum(u8) {
     v128 = 0x7b,
 };
 
-pub const ReferenceType = enum(u8) {
+pub const RefType = enum(u8) {
     funcref = 0x70,
     externref = 0x6f,
 };
 
-pub const ValueType = enum(u8) {
+pub const ValType = enum(u8) {
     i32 = 0x7f,
     i64 = 0x7e,
     f32 = 0x7d,
@@ -528,9 +528,9 @@ pub const ValueType = enum(u8) {
     externref = 0x6f,
 };
 
-pub const ResultType = []const ValueType;
+pub const ResultType = []const ValType;
 
-pub const FunctionType = struct {
+pub const FuncType = struct {
     parameters: ResultType,
     results: ResultType,
 };
@@ -540,26 +540,26 @@ pub const Limits = struct {
     max: ?u32 = null,
 };
 
-pub const MemoryType = struct {
+pub const MemType = struct {
     limits: Limits,
 };
 
 pub const TableType = struct {
-    element_type: ReferenceType,
+    element_type: RefType,
     limits: Limits,
 };
 
-pub const Mutability = enum(u8) {
+pub const Mut = enum(u8) {
     @"const" = 0x00,
     @"var" = 0x01,
 };
 
 pub const GlobalType = struct {
-    value_type: ValueType,
-    mutability: Mutability,
+    value_type: ValType,
+    mutability: Mut,
 };
 
-pub const MemoryArgument = struct {
+pub const MemArg = struct {
     alignment: u32,
     offset: u32,
 };
@@ -578,55 +578,55 @@ fn Imported(comptime Type: type) type {
     };
 }
 
-pub const ImportedFunction = Imported(TypeIndex);
+pub const ImportedFunc = Imported(TypeIdx);
 
 pub const ImportedTable = Imported(TableType);
 
-pub const ImportedMemory = Imported(MemoryType);
+pub const ImportedMem = Imported(MemType);
 
 pub const ImportedGlobal = Imported(GlobalType);
 
-pub const ConstantExpression = union(enum) {
+pub const ConstantExpr = union(enum) {
     i32_const: i32,
     i64_const: i64,
     f32_const: u32,
     f64_const: u64,
     ref_null: void,
-    ref_func: FunctionIndex,
-    global_get: GlobalIndex,
+    ref_func: FuncIdx,
+    global_get: GlobalIdx,
 };
 
-pub const I32ConstantExpression = union(enum) {
+pub const I32ConstantExpr = union(enum) {
     i32_const: i32,
-    global_get: GlobalIndex,
+    global_get: GlobalIdx,
 };
 
-pub const FuncrefConstantExpression = union(enum) {
+pub const FuncrefConstantExpr = union(enum) {
     ref_null: void,
-    ref_func: FunctionIndex,
-    global_get: GlobalIndex,
+    ref_func: FuncIdx,
+    global_get: GlobalIdx,
 };
 
-pub const ExternrefConstantExpression = union(enum) {
+pub const ExternrefConstantExpr = union(enum) {
     ref_null: void,
-    global_get: GlobalIndex,
+    global_get: GlobalIdx,
 };
 
 pub const BlockType = union(enum) {
-    immediate: ?ValueType,
-    indexed: FunctionIndex,
+    immediate: ?ValType,
+    indexed: FuncIdx,
 };
 
 pub const Global = struct {
     type: GlobalType,
-    initial_value: ConstantExpression,
+    initial_value: ConstantExpr,
 };
 
 pub const ExportDesc = union(enum) {
-    function: FunctionIndex,
-    table: TableIndex,
-    memory: MemoryIndex,
-    global: GlobalIndex,
+    function: FuncIdx,
+    table: TableIdx,
+    memory: MemIdx,
+    global: GlobalIdx,
 };
 
 pub const Export = struct {
@@ -638,7 +638,7 @@ pub const ElemKind = enum(u8) {
     funcref = 0x00,
 };
 
-pub const ElementSegment = struct {
+pub const Elem = struct {
     mode: Mode,
     init: Init,
 
@@ -648,19 +648,19 @@ pub const ElementSegment = struct {
         declarative: void,
 
         pub const Active = struct {
-            table: TableIndex,
-            offset: I32ConstantExpression,
+            table: TableIdx,
+            offset: I32ConstantExpr,
         };
     };
 
     pub const Init = union(enum) {
-        funcrefs: []const FunctionIndex,
-        funcref_exprs: []const FuncrefConstantExpression,
-        externref_exprs: []const ExternrefConstantExpression,
+        funcrefs: []const FuncIdx,
+        funcref_exprs: []const FuncrefConstantExpr,
+        externref_exprs: []const ExternrefConstantExpr,
     };
 };
 
-pub const DataSegment = struct {
+pub const Data = struct {
     mode: Mode,
     init: []const u8,
 
@@ -669,8 +669,8 @@ pub const DataSegment = struct {
         passive: void,
 
         pub const Active = struct {
-            memory: MemoryIndex,
-            offset: I32ConstantExpression,
+            memory: MemIdx,
+            offset: I32ConstantExpr,
         };
     };
 };

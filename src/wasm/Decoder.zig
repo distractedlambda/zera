@@ -91,23 +91,23 @@ pub fn nextByteVector(self: *@This()) !wasm.Name {
 // TODO: validate UTF8?
 pub const nextName = nextByteVector;
 
-pub fn nextNumericType(self: *@This()) !wasm.NumericType {
-    return std.meta.intToEnum(wasm.NumericType, try self.nextByte()) catch
+pub fn nextNumericType(self: *@This()) !wasm.NumType {
+    return std.meta.intToEnum(wasm.NumType, try self.nextByte()) catch
         error.UnsupportedNumberType;
 }
 
-pub fn nextVectorType(self: *@This()) !wasm.VectorType {
-    return std.meta.intToEnum(wasm.VectorType, try self.nextByte()) catch
+pub fn nextVectorType(self: *@This()) !wasm.VecType {
+    return std.meta.intToEnum(wasm.VecType, try self.nextByte()) catch
         error.UnsupportedVectorType;
 }
 
-pub fn nextReferenceType(self: *@This()) !wasm.ReferenceType {
-    return std.meta.intToEnum(wasm.ReferenceType, try self.nextByte()) catch
+pub fn nextReferenceType(self: *@This()) !wasm.RefType {
+    return std.meta.intToEnum(wasm.RefType, try self.nextByte()) catch
         error.UnsupportedReferenceType;
 }
 
-pub fn nextValueType(self: *@This()) !wasm.ValueType {
-    return std.meta.intToEnum(wasm.ValueType, try self.nextByte()) catch
+pub fn nextValueType(self: *@This()) !wasm.ValType {
+    return std.meta.intToEnum(wasm.ValType, try self.nextByte()) catch
         error.UnsupportedValueType;
 }
 
@@ -116,13 +116,13 @@ pub fn nextResultType(self: *@This()) !wasm.ResultType {
     const types = try self.nextBytes(len);
 
     for (types) |t|
-        _ = std.meta.intToEnum(wasm.ValueType, t) catch
+        _ = std.meta.intToEnum(wasm.ValType, t) catch
             return error.UnsupportedValueType;
 
-    return std.mem.bytesAsSlice(wasm.ValueType, types);
+    return std.mem.bytesAsSlice(wasm.ValType, types);
 }
 
-pub fn nextFunctionType(self: *@This()) !wasm.FunctionType {
+pub fn nextFunctionType(self: *@This()) !wasm.FuncType {
     if (try self.nextByte() != 0x60)
         return error.UnsupportedFunctionType;
 
@@ -140,7 +140,7 @@ pub fn nextLimits(self: *@This()) !wasm.Limits {
     };
 }
 
-pub fn nextMemoryType(self: *@This()) !wasm.MemoryType {
+pub fn nextMemoryType(self: *@This()) !wasm.MemType {
     return .{ .limits = try self.nextLimits() };
 }
 
@@ -151,8 +151,8 @@ pub fn nextTableType(self: *@This()) !wasm.TableType {
     };
 }
 
-pub fn nextMutability(self: *@This()) !wasm.Mutability {
-    return std.meta.intToEnum(wasm.Mutability, try self.nextByte()) catch
+pub fn nextMutability(self: *@This()) !wasm.Mut {
+    return std.meta.intToEnum(wasm.Mut, try self.nextByte()) catch
         error.UnsupportedMutability;
 }
 
