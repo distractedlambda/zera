@@ -4,6 +4,8 @@ const wasm = @import("../wasm.zig");
 
 const Decoder = @import("Decoder.zig");
 
+allocator: std.mem.Allocator,
+
 types: std.ArrayListUnmanaged(wasm.FunctionType) = .{},
 imported_functions: std.ArrayListUnmanaged(wasm.ImportedFunction) = .{},
 imported_tables: std.ArrayListUnmanaged(wasm.ImportedTable) = .{},
@@ -23,37 +25,37 @@ function_names: std.AutoHashMapUnmanaged(wasm.FunctionIndex, []const u8) = .{},
 local_names: std.AutoHashMapUnmanaged(struct { wasm.FunctionIndex, wasm.LocalIndex }, []const u8) = .{},
 
 pub fn init(allocator: std.mem.Allocator, module_data: []const u8) !@This() {
-    var directory = @This(){};
-    errdefer directory.deinit(allocator);
-    try directory.processModule(allocator, module_data);
+    var directory = @This(){ .allocator = allocator };
+    errdefer directory.deinit();
+    try directory.processModule(module_data);
     return directory;
 }
 
-pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+pub fn deinit(self: *@This()) void {
     for (self.element_segments.items) |*segment| {
         switch (segment.init) {
-            inline else => |vector| allocator.free(vector),
+            inline else => |vector| self.allocator.free(vector),
         }
     }
 
-    self.types.deinit(allocator);
-    self.imported_functions.deinit(allocator);
-    self.imported_tables.deinit(allocator);
-    self.imported_memories.deinit(allocator);
-    self.imported_globals.deinit(allocator);
-    self.functions.deinit(allocator);
-    self.tables.deinit(allocator);
-    self.memories.deinit(allocator);
-    self.globals.deinit(allocator);
-    self.exports.deinit(allocator);
-    self.element_segments.deinit(allocator);
-    self.code.deinit(allocator);
-    self.data_segments.deinit(allocator);
-    self.function_names.deinit(allocator);
-    self.local_names.deinit(allocator);
+    self.types.deinit(self.allocator);
+    self.imported_functions.deinit(self.allocator);
+    self.imported_tables.deinit(self.allocator);
+    self.imported_memories.deinit(self.allocator);
+    self.imported_globals.deinit(self.allocator);
+    self.functions.deinit(self.allocator);
+    self.tables.deinit(self.allocator);
+    self.memories.deinit(self.allocator);
+    self.globals.deinit(self.allocator);
+    self.exports.deinit(self.allocator);
+    self.element_segments.deinit(self.allocator);
+    self.code.deinit(self.allocator);
+    self.data_segments.deinit(self.allocator);
+    self.function_names.deinit(self.allocator);
+    self.local_names.deinit(self.allocator);
 }
 
-fn processModule(self: *@This(), allocator: std.mem.Allocator, data: []const u8) !void {
+fn processModule(self: *@This(), data: []const u8) !void {
     var decoder = Decoder.init(data);
 
     if (!std.mem.eql(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, try decoder.nextBytes(4)))
@@ -66,31 +68,31 @@ fn processModule(self: *@This(), allocator: std.mem.Allocator, data: []const u8)
         const section_id = try decoder.nextByte();
         const section_len = try decoder.nextInt(u32);
         const section_data = try decoder.nextBytes(section_len);
-        try self.processSection(allocator, section_id, section_data);
+        try self.processSection(section_id, section_data);
     }
 
     if (self.functions.items.len != self.code.items.len)
         return error.InconsistentFunctionCount;
 }
 
-fn processSection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []const u8) !void {
+fn processSection(self: *@This(), id: u8, data: []const u8) !void {
     var decoder = Decoder.init(data);
     switch (id) {
         0 => {
             const name = try decoder.nextName();
             if (std.mem.eql(u8, name, "name")) {
-                self.processNameSection(allocator, decoder.remainder()) catch |err| {
+                self.processNameSection(decoder.remainder()) catch |err| {
                     std.log.err("error parsing 'name' section: {}", .{err});
                     self.module_name = null;
-                    self.function_names.clearAndFree(allocator);
-                    self.local_names.clearAndFree(allocator);
+                    self.function_names.clearAndFree(self.allocator);
+                    self.local_names.clearAndFree(self.allocator);
                 };
             }
         },
 
         1 => {
             const len = try decoder.nextInt(u32);
-            try self.types.ensureUnusedCapacity(allocator, len);
+            try self.types.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| self.types.appendAssumeCapacity(try decoder.nextFunctionType());
         },
 
@@ -103,22 +105,22 @@ fn processSection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []
                 };
 
                 switch (try decoder.nextByte()) {
-                    0x00 => try self.imported_functions.append(allocator, .{
+                    0x00 => try self.imported_functions.append(self.allocator, .{
                         .name = name,
                         .type = try self.nextIndex(&decoder, wasm.TypeIndex),
                     }),
 
-                    0x01 => try self.imported_tables.append(allocator, .{
+                    0x01 => try self.imported_tables.append(self.allocator, .{
                         .name = name,
                         .type = try decoder.nextTableType(),
                     }),
 
-                    0x02 => try self.imported_memories.append(allocator, .{
+                    0x02 => try self.imported_memories.append(self.allocator, .{
                         .name = name,
                         .type = try decoder.nextMemoryType(),
                     }),
 
-                    0x03 => try self.imported_globals.append(allocator, .{
+                    0x03 => try self.imported_globals.append(self.allocator, .{
                         .name = name,
                         .type = try decoder.nextGlobalType(),
                     }),
@@ -130,31 +132,31 @@ fn processSection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []
 
         3 => {
             const len = try decoder.nextInt(u32);
-            try self.functions.ensureUnusedCapacity(allocator, len);
+            try self.functions.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| self.functions.appendAssumeCapacity(try self.nextIndex(&decoder, wasm.TypeIndex));
         },
 
         4 => {
             const len = try decoder.nextInt(u32);
-            try self.tables.ensureUnusedCapacity(allocator, len);
+            try self.tables.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| self.tables.appendAssumeCapacity(try decoder.nextTableType());
         },
 
         5 => {
             const len = try decoder.nextInt(u32);
-            try self.memories.ensureUnusedCapacity(allocator, len);
+            try self.memories.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| self.memories.appendAssumeCapacity(try decoder.nextMemoryType());
         },
 
         6 => {
             const len = try decoder.nextInt(u32);
-            try self.globals.ensureUnusedCapacity(allocator, len);
+            try self.globals.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| self.globals.appendAssumeCapacity(try self.nextGlobal(&decoder));
         },
 
         7 => {
             const len = try decoder.nextInt(u32);
-            try self.exports.ensureUnusedCapacity(allocator, len);
+            try self.exports.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| self.exports.appendAssumeCapacity(try self.nextExport(&decoder));
         },
 
@@ -164,19 +166,19 @@ fn processSection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []
 
         9 => {
             const len = try decoder.nextInt(u32);
-            try self.element_segments.ensureUnusedCapacity(allocator, len);
-            for (0..len) |_| self.element_segments.appendAssumeCapacity(try self.nextElementSegment(allocator, &decoder));
+            try self.element_segments.ensureUnusedCapacity(self.allocator, len);
+            for (0..len) |_| self.element_segments.appendAssumeCapacity(try self.nextElementSegment(&decoder));
         },
 
         10 => {
             const len = try decoder.nextInt(u32);
-            try self.code.ensureUnusedCapacity(allocator, len);
+            try self.code.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| self.code.appendAssumeCapacity(try decoder.nextBytes(try decoder.nextInt(u32)));
         },
 
         11 => {
             const len = try decoder.nextInt(u32);
-            try self.data_segments.ensureUnusedCapacity(allocator, len);
+            try self.data_segments.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| self.data_segments.appendAssumeCapacity(try self.nextDataSegment(&decoder));
         },
 
@@ -188,17 +190,17 @@ fn processSection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []
     }
 }
 
-fn processNameSection(self: *@This(), allocator: std.mem.Allocator, data: []const u8) !void {
+fn processNameSection(self: *@This(), data: []const u8) !void {
     var decoder = Decoder.init(data);
     while (!decoder.atEnd()) {
         const subsection_id = try decoder.nextByte();
         const subsection_len = try decoder.nextInt(u32);
         const subsection_data = try decoder.nextBytes(subsection_len);
-        try self.processNameSubsection(allocator, subsection_id, subsection_data);
+        try self.processNameSubsection(subsection_id, subsection_data);
     }
 }
 
-fn processNameSubsection(self: *@This(), allocator: std.mem.Allocator, id: u8, data: []const u8) !void {
+fn processNameSubsection(self: *@This(), id: u8, data: []const u8) !void {
     var decoder = Decoder.init(data);
     switch (id) {
         0 => {
@@ -207,7 +209,7 @@ fn processNameSubsection(self: *@This(), allocator: std.mem.Allocator, id: u8, d
 
         1 => {
             const len = try decoder.nextInt(u32);
-            try self.function_names.ensureUnusedCapacity(allocator, len);
+            try self.function_names.ensureUnusedCapacity(self.allocator, len);
             for (0..len) |_| {
                 const function = try self.nextIndex(&decoder, wasm.FunctionIndex);
                 const function_name = try decoder.nextName();
@@ -220,7 +222,7 @@ fn processNameSubsection(self: *@This(), allocator: std.mem.Allocator, id: u8, d
             for (0..outer_len) |_| {
                 const function = try self.nextIndex(&decoder, wasm.FunctionIndex);
                 const inner_len = try decoder.nextInt(u32);
-                try self.local_names.ensureUnusedCapacity(allocator, inner_len);
+                try self.local_names.ensureUnusedCapacity(self.allocator, inner_len);
                 for (0..inner_len) |_| {
                     const local = wasm.LocalIndex{ .value = try decoder.nextInt(u32) };
                     const name = try decoder.nextName();
@@ -233,7 +235,7 @@ fn processNameSubsection(self: *@This(), allocator: std.mem.Allocator, id: u8, d
     }
 }
 
-fn validateIndex(self: *@This(), idx: anytype) !@TypeOf(idx) {
+pub fn validateIndex(self: *const @This(), idx: anytype) !@TypeOf(idx) {
     switch (@TypeOf(idx)) {
         wasm.TypeIndex => if (idx.value >= self.types.items.len)
             return error.TypeIndexOutOfBounds,
@@ -250,29 +252,29 @@ fn validateIndex(self: *@This(), idx: anytype) !@TypeOf(idx) {
         wasm.GlobalIndex => if (idx.value >= self.imported_globals.items.len and idx.value - self.imported_globals.items.len >= self.globals.items.len)
             return error.GlobalIndexOutOfBounds,
 
-        else => unreachable,
+        else => @compileError("invalid index type: " ++ @typeName(@TypeOf(idx))),
     }
 
     return idx;
 }
 
-fn nextIndex(self: *@This(), decoder: *Decoder, comptime T: type) !T {
+pub fn nextIndex(self: *const @This(), decoder: *Decoder, comptime T: type) !T {
     return try self.validateIndex(T{ .value = try decoder.nextInt(u32) });
 }
 
-fn isImport(self: *@This(), idx: anytype) bool {
+pub fn isImport(self: *const @This(), idx: anytype) bool {
     const imports_len = switch (@TypeOf(idx)) {
         wasm.FunctionIndex => self.imported_functions.items.len,
         wasm.TableIndex => self.imported_tables.items.len,
         wasm.MemoryIndex => self.imported_memories.items.len,
         wasm.GlobalIndex => self.imported_globals.items.len,
-        else => unreachable,
+        else => @compileError("invalid index type: " ++ @typeName(@TypeOf(idx))),
     };
 
     return idx.value < imports_len;
 }
 
-fn nextConstantGlobalGet(self: *@This(), decoder: *Decoder, expected_type: wasm.ValueType) !wasm.GlobalIndex {
+fn nextConstantGlobalGet(self: *const @This(), decoder: *Decoder, expected_type: wasm.ValueType) !wasm.GlobalIndex {
     const idx = try self.nextIndex(decoder, wasm.GlobalIndex);
 
     if (!self.isImport(idx))
@@ -389,44 +391,44 @@ fn nextExternrefConstantExpression(self: *@This(), decoder: *Decoder) !wasm.Exte
     return value;
 }
 
-fn nextIndexVector(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder, comptime T: type) ![]const T {
+fn nextIndexVector(self: *@This(), decoder: *Decoder, comptime T: type) ![]const T {
     const len = try decoder.nextInt(u32);
-    const indices = try allocator.alloc(T, len);
-    errdefer allocator.free(indices);
+    const indices = try self.allocator.alloc(T, len);
+    errdefer self.allocator.free(indices);
     for (indices) |*idx| idx.* = try self.nextIndex(decoder, T);
     return indices;
 }
 
-fn nextFuncrefConstantExpressionVector(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) ![]const wasm.FuncrefConstantExpression {
+fn nextFuncrefConstantExpressionVector(self: *@This(), decoder: *Decoder) ![]const wasm.FuncrefConstantExpression {
     const len = try decoder.nextInt(u32);
-    const exprs = try allocator.alloc(wasm.FuncrefConstantExpression, len);
-    errdefer allocator.free(exprs);
+    const exprs = try self.allocator.alloc(wasm.FuncrefConstantExpression, len);
+    errdefer self.allocator.free(exprs);
     for (exprs) |*expr| expr.* = try self.nextFuncrefConstantExpression(decoder);
     return exprs;
 }
 
-fn nextExternrefConstantExpressionVector(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) ![]const wasm.ExternrefConstantExpression {
+fn nextExternrefConstantExpressionVector(self: *@This(), decoder: *Decoder) ![]const wasm.ExternrefConstantExpression {
     const len = try decoder.nextInt(u32);
-    const exprs = try allocator.alloc(wasm.ExternrefConstantExpression, len);
-    errdefer allocator.free(exprs);
+    const exprs = try self.allocator.alloc(wasm.ExternrefConstantExpression, len);
+    errdefer self.allocator.free(exprs);
     for (exprs) |*expr| expr.* = try self.nextExternrefConstantExpression(decoder);
     return exprs;
 }
 
-fn nextKindedElementSegmentInit(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) !wasm.ElementSegment.Init {
+fn nextKindedElementSegmentInit(self: *@This(), decoder: *Decoder) !wasm.ElementSegment.Init {
     return switch (try decoder.nextElemKind()) {
-        .funcref => .{ .funcrefs = try self.nextIndexVector(allocator, decoder, wasm.FunctionIndex) },
+        .funcref => .{ .funcrefs = try self.nextIndexVector(decoder, wasm.FunctionIndex) },
     };
 }
 
-fn nextTypedElementSegmentInit(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) !wasm.ElementSegment.Init {
+fn nextTypedElementSegmentInit(self: *@This(), decoder: *Decoder) !wasm.ElementSegment.Init {
     return switch (try decoder.nextReferenceType()) {
-        .funcref => .{ .funcref_exprs = try self.nextFuncrefConstantExpressionVector(allocator, decoder) },
-        .externref => .{ .externref_exprs = try self.nextExternrefConstantExpressionVector(allocator, decoder) },
+        .funcref => .{ .funcref_exprs = try self.nextFuncrefConstantExpressionVector(decoder) },
+        .externref => .{ .externref_exprs = try self.nextExternrefConstantExpressionVector(decoder) },
     };
 }
 
-fn nextElementSegment(self: *@This(), allocator: std.mem.Allocator, decoder: *Decoder) !wasm.ElementSegment {
+fn nextElementSegment(self: *@This(), decoder: *Decoder) !wasm.ElementSegment {
     return switch (try decoder.nextInt(u32)) {
         0 => .{
             .mode = .{ .active = .{
@@ -434,12 +436,12 @@ fn nextElementSegment(self: *@This(), allocator: std.mem.Allocator, decoder: *De
                 .offset = try self.nextI32ConstantExpression(decoder),
             } },
 
-            .init = .{ .funcrefs = try self.nextIndexVector(allocator, decoder, wasm.FunctionIndex) },
+            .init = .{ .funcrefs = try self.nextIndexVector(decoder, wasm.FunctionIndex) },
         },
 
         1 => .{
             .mode = .passive,
-            .init = try self.nextKindedElementSegmentInit(allocator, decoder),
+            .init = try self.nextKindedElementSegmentInit(decoder),
         },
 
         2 => .{
@@ -448,12 +450,12 @@ fn nextElementSegment(self: *@This(), allocator: std.mem.Allocator, decoder: *De
                 .offset = try self.nextI32ConstantExpression(decoder),
             } },
 
-            .init = try self.nextKindedElementSegmentInit(allocator, decoder),
+            .init = try self.nextKindedElementSegmentInit(decoder),
         },
 
         3 => .{
             .mode = .declarative,
-            .init = try self.nextKindedElementSegmentInit(allocator, decoder),
+            .init = try self.nextKindedElementSegmentInit(decoder),
         },
 
         4 => .{
@@ -462,12 +464,12 @@ fn nextElementSegment(self: *@This(), allocator: std.mem.Allocator, decoder: *De
                 .offset = try self.nextI32ConstantExpression(decoder),
             } },
 
-            .init = .{ .funcref_exprs = try self.nextFuncrefConstantExpressionVector(allocator, decoder) },
+            .init = .{ .funcref_exprs = try self.nextFuncrefConstantExpressionVector(decoder) },
         },
 
         5 => .{
             .mode = .passive,
-            .init = try self.nextTypedElementSegmentInit(allocator, decoder),
+            .init = try self.nextTypedElementSegmentInit(decoder),
         },
 
         6 => .{
@@ -476,12 +478,12 @@ fn nextElementSegment(self: *@This(), allocator: std.mem.Allocator, decoder: *De
                 .offset = try self.nextI32ConstantExpression(decoder),
             } },
 
-            .init = try self.nextTypedElementSegmentInit(allocator, decoder),
+            .init = try self.nextTypedElementSegmentInit(decoder),
         },
 
         7 => .{
             .mode = .declarative,
-            .init = try self.nextTypedElementSegmentInit(allocator, decoder),
+            .init = try self.nextTypedElementSegmentInit(decoder),
         },
 
         else => error.UnsupportedElementSegment,
@@ -511,6 +513,68 @@ fn nextDataSegment(self: *@This(), decoder: *Decoder) !wasm.DataSegment {
     };
 }
 
+pub fn ImportedOrDeclared(comptime Imported: type, comptime Declared: type) type {
+    return union(enum) {
+        imported: Imported,
+        declared: Declared,
+    };
+}
+
+pub fn lookUp(self: *const @This(), idx: anytype) switch (@TypeOf(idx)) {
+    wasm.TypeIndex => wasm.FunctionType,
+    wasm.FunctionIndex => ImportedOrDeclared(wasm.ImportedFunction, wasm.TypeIndex),
+    wasm.TableIndex => ImportedOrDeclared(wasm.ImportedTable, wasm.TableType),
+    wasm.MemoryIndex => ImportedOrDeclared(wasm.ImportedMemory, wasm.MemoryType),
+    wasm.GlobalIndex => ImportedOrDeclared(wasm.ImportedGlobal, wasm.GlobalType),
+    else => @compileError("invalid index type: " ++ @typeName(@TypeOf(idx))),
+} {
+    return switch (@TypeOf(idx)) {
+        wasm.TypeIndex => self.types.items[idx.value],
+
+        wasm.FunctionIndex => if (self.isImport(idx))
+            .{ .imported = self.imported_functions.items[idx.value] }
+        else
+            .{ .declared = self.functions.items[idx.value - self.imported_functions.items.len] },
+
+        wasm.TableIndex => if (self.isImport(idx))
+            .{ .imported = self.imported_tables.items[idx.value] }
+        else
+            .{ .declared = self.tables.items[idx.value - self.imported_tables.items.len] },
+
+        wasm.MemoryIndex => if (self.isImport(idx))
+            .{ .imported = self.imported_memories.items[idx.value] }
+        else
+            .{ .declared = self.memories.items[idx.value - self.imported_memories.items.len] },
+
+        wasm.GlobalIndex => if (self.isImport(idx))
+            .{ .imported = self.imported_globals.items[idx.value] }
+        else
+            .{ .declared = self.globals.items[idx.value - self.imported_globals.items.len] },
+
+        else => unreachable,
+    };
+}
+
+pub fn lookUpType(self: *const @This(), idx: anytype) switch (@TypeOf(idx)) {
+    wasm.FunctionIndex => wasm.FunctionType,
+    wasm.TableIndex => wasm.TableType,
+    wasm.MemoryIndex => wasm.MemoryType,
+    wasm.GlobalIndex => wasm.GlobalType,
+    else => @compileError("invalid index type: " ++ @typeName(@TypeOf(idx))),
+} {
+    return switch (@TypeOf(idx)) {
+        wasm.FunctionIndex => self.lookUp(switch (self.lookUp(idx)) {
+            .imported => |import| import.type,
+            .declared => |type_idx| type_idx,
+        }),
+
+        inline wasm.TableIndex, wasm.MemoryIndex, wasm.GlobalIndex => switch (self.lookUp(idx)) {
+            .imported => |import| import.type,
+            .declared => |t| t,
+        },
+    };
+}
+
 test "ref all decls" {
     std.testing.refAllDecls(@This());
 }
@@ -529,7 +593,7 @@ test "summarize test modules" {
             defer mapping.deinit();
 
             var summary = try init(std.testing.allocator, mapping.contents);
-            defer summary.deinit(std.testing.allocator);
+            defer summary.deinit();
         }
     }
 }

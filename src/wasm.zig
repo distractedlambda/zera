@@ -571,25 +571,20 @@ pub const ImportName = struct {
     name: []const u8,
 };
 
-pub const ImportedFunction = struct {
-    name: ImportName,
-    type: TypeIndex,
-};
+fn Imported(comptime Type: type) type {
+    return struct {
+        name: ImportName,
+        type: Type,
+    };
+}
 
-pub const ImportedTable = struct {
-    name: ImportName,
-    type: TableType,
-};
+pub const ImportedFunction = Imported(TypeIndex);
 
-pub const ImportedMemory = struct {
-    name: ImportName,
-    type: MemoryType,
-};
+pub const ImportedTable = Imported(TableType);
 
-pub const ImportedGlobal = struct {
-    name: ImportName,
-    type: GlobalType,
-};
+pub const ImportedMemory = Imported(MemoryType);
+
+pub const ImportedGlobal = Imported(GlobalType);
 
 pub const ConstantExpression = union(enum) {
     i32_const: i32,
