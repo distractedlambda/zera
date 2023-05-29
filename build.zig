@@ -1,8 +1,31 @@
 const std = @import("std");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
+const wasm_cpu_model = std.Target.Cpu.Model{
+    .name = "generic",
+    .llvm_name = "generic",
+    .features = std.Target.wasm.featureSet(&.{
+        .bulk_memory,
+        .multivalue,
+        .mutable_globals,
+        .nontrapping_fptoint,
+        .reference_types,
+        .sign_ext,
+        .simd128,
+    }),
+};
+
+const wasm_freestanding_target = std.zig.CrossTarget{
+    .cpu_arch = .wasm32,
+    .cpu_model = .{ .explicit = &wasm_cpu_model },
+    .os_tag = .freestanding,
+};
+
+const wasm_wasi_target = std.zig.CrossTarget{
+    .cpu_arch = .wasm32,
+    .cpu_model = .{ .explicit = &wasm_cpu_model },
+    .os_tag = .wasi,
+};
+
 pub fn build(b: *std.Build) void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
@@ -23,6 +46,15 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    const validate_utf8_module = b.addSharedLibrary(.{
+        .name = "validate_utf8",
+        .root_source_file = .{ .path = "src/test_modules/validate_utf8.zig" },
+        .target = wasm_freestanding_target,
+        .optimize = .ReleaseSmall,
+    });
+
+    const install_validate_utf8 = b.addInstallArtifact(validate_utf8_module);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -61,6 +93,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
+    run_unit_tests.step.dependOn(&install_validate_utf8.step);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
