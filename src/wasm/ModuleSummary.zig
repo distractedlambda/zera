@@ -572,6 +572,8 @@ pub fn lookUpType(self: *const @This(), idx: anytype) switch (@TypeOf(idx)) {
             .imported => |import| import.type,
             .declared => |t| t,
         },
+
+        else => unreachable,
     };
 }
 

@@ -676,6 +676,7 @@ pub const Data = struct {
 };
 
 test {
+    _ = @import("wasm/code_processor.zig");
     _ = @import("wasm/Decoder.zig");
     _ = @import("wasm/ModuleSummary.zig");
     _ = @import("wasm/opcodes.zig");
