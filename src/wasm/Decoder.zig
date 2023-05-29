@@ -168,6 +168,86 @@ pub fn nextGlobalType(self: *@This()) !wasm.GlobalType {
     };
 }
 
- test "ref all decls" {
+test "ref all decls" {
     std.testing.refAllDecls(@This());
- }
+}
+
+test "empty data is atEnd()" {
+    try std.testing.expect(init(&.{}).atEnd());
+}
+
+test "nextByte() on empty data returns error" {
+    var decoder = init(&.{});
+    try std.testing.expectError(error.UnexpectedEndOfData, decoder.nextByte());
+}
+
+test "one byte is not atEnd()" {
+    try std.testing.expect(!init(&.{69}).atEnd());
+}
+
+test "nextByte() on one byte" {
+    var decoder = init(&.{69});
+    try std.testing.expectEqual(@as(u8, 69), try decoder.nextByte());
+    try std.testing.expect(decoder.atEnd());
+}
+
+test "nextBytes(1) on one byte" {
+    var decoder = init(&.{69});
+    try std.testing.expectEqualSlices(u8, &.{69}, try decoder.nextBytes(1));
+    try std.testing.expect(decoder.atEnd());
+}
+
+test "nextBytes(2) on one byte returns error" {
+    var decoder = init(&.{69});
+    try std.testing.expectError(error.UnexpectedEndOfData, decoder.nextBytes(@as(usize, 2)));
+}
+
+test "single-byte u32" {
+    var decoder = init(&.{69});
+    try std.testing.expectEqual(@as(u32, 69), try decoder.nextInt(u32));
+}
+
+test "single-byte positive i32" {
+    var decoder = init(&.{42});
+    try std.testing.expectEqual(@as(i32, 42), try decoder.nextInt(i32));
+}
+
+test "single-byte negative i32" {
+    var decoder = init(&.{69});
+    try std.testing.expectEqual(@as(i33, @bitCast(i7, @as(u7, 69))), try decoder.nextInt(i32));
+}
+
+test "dual-byte u32" {
+    var decoder = init(&.{0xa4, 0x03});
+    try std.testing.expectEqual(@as(u32, 420), try decoder.nextInt(u32));
+    try std.testing.expect(decoder.atEnd());
+}
+
+test "this dual-byte u32 could've been a single byte" {
+    var decoder = init(&.{0xc5, 0x00});
+    try std.testing.expectEqual(@as(u32, 69), try decoder.nextInt(u32));
+    try std.testing.expect(decoder.atEnd());
+}
+
+test "triple-byte u32" {
+    var decoder = init(&.{0xd5, 0xc8, 0x02});
+    try std.testing.expectEqual(@as(u32, 42069), try decoder.nextInt(u32));
+    try std.testing.expect(decoder.atEnd());
+}
+
+test "max u32" {
+    var decoder = init(&.{0xff, 0xff, 0xff, 0xff, 0x0f});
+    try std.testing.expectEqual(@as(u32, std.math.maxInt(u32)), try decoder.nextInt(u32));
+    try std.testing.expect(decoder.atEnd());
+}
+
+test "u32 overflow" {
+    var decoder = init(&.{0xff, 0xff, 0xff, 0xff, 0x1f});
+    try std.testing.expectError(error.Overflow, decoder.nextInt(u32));
+}
+
+test "name" {
+    var decoder = init(&[_]u8{0x09} ++ "John Wick");
+    try std.testing.expectEqualSlices(u8, "John Wick", try decoder.nextName());
+    try std.testing.expect(decoder.atEnd());
+}

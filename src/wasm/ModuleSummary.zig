@@ -24,6 +24,7 @@ local_names: std.AutoHashMapUnmanaged(struct { wasm.FunctionIndex, wasm.LocalInd
 
 pub fn init(allocator: std.mem.Allocator, module_data: []const u8) !@This() {
     var directory = @This(){};
+    errdefer directory.deinit(allocator);
     try directory.processModule(allocator, module_data);
     return directory;
 }
@@ -54,6 +55,12 @@ pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
 
 fn processModule(self: *@This(), allocator: std.mem.Allocator, data: []const u8) !void {
     var decoder = Decoder.init(data);
+
+    if (!std.mem.eql(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, try decoder.nextBytes(4)))
+        return error.NotABinaryWasmModule;
+
+    if (!std.mem.eql(u8, &.{ 0x01, 0x00, 0x00, 0x00 }, try decoder.nextBytes(4)))
+        return error.UnsupportedBinaryFormatVersion;
 
     while (!decoder.atEnd()) {
         const section_id = try decoder.nextByte();
@@ -228,7 +235,7 @@ fn processNameSubsection(self: *@This(), allocator: std.mem.Allocator, id: u8, d
 
 fn validateIndex(self: *@This(), idx: anytype) !@TypeOf(idx) {
     switch (@TypeOf(idx)) {
-        wasm.TypeIndex => if (idx.value < self.types.items.len)
+        wasm.TypeIndex => if (idx.value >= self.types.items.len)
             return error.TypeIndexOutOfBounds,
 
         wasm.FunctionIndex => if (idx.value >= self.imported_functions.items.len and idx.value - self.imported_functions.items.len >= self.functions.items.len)
