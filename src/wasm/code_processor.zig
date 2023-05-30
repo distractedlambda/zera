@@ -43,12 +43,18 @@ pub fn CodeProcessor(comptime Backend: type) type {
         const BackendLoop = getBackendType("Loop");
         const BackendIf = getBackendType("If");
         const BackendElse = getBackendType("Else");
+        const BackendLocalVisitor = getBackendVisitorType("visitLocals");
+        const BackendInstrVisitor = getBackendVisitorType("visitInstrs");
 
         fn getBackendType(comptime name: []const u8) type {
             return if (@hasDecl(Backend, name))
                 @field(Backend, name)
             else
                 void;
+        }
+
+        fn getBackendVisitorType(comptime name: []const u8) type {
+            return @typeInfo(@typeInfo(@TypeOf(@field(Backend, name))).Fn.return_type.?).ErrorUnion.payload;
         }
 
         pub fn init(module_summary: *const ModuleSummary, allocator: std.mem.Allocator) @This() {
@@ -99,7 +105,7 @@ pub fn CodeProcessor(comptime Backend: type) type {
             try visitor.finish();
         }
 
-        fn visitLocal(self: *@This(), visitor: anytype, func: wasm.FuncIdx, typ: wasm.ValType) !void {
+        fn visitLocal(self: *@This(), visitor: *BackendLocalVisitor, func: wasm.FuncIdx, typ: wasm.ValType) !void {
             const idx = wasm.LocalIdx{
                 .value = std.math.cast(u32, self.locals.items.len) orelse
                     return error.TooManyLocals,
@@ -113,7 +119,7 @@ pub fn CodeProcessor(comptime Backend: type) type {
             });
         }
 
-        fn visitInstrs(self: *@This(), visitor: anytype, decoder: *Decoder) !void {
+        fn visitInstrs(self: *@This(), visitor: *BackendInstrVisitor, decoder: *Decoder) !void {
             while (true) switch (try decoder.nextByte()) {
                 opcodes.@"unreachable" => if (!self.restUnreachable()) {
                     try visitor.visitUnreachable();
