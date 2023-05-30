@@ -1,3 +1,4 @@
+const opcodes = @import("opcodes.zig");
 const std = @import("std");
 const wasm = @import("../wasm.zig");
 
@@ -11,6 +12,7 @@ pub fn CodeProcessor(comptime Backend: type) type {
         locals: std.ArrayListUnmanaged(Local) = .{},
         operand_stack: std.ArrayListUnmanaged(Operand) = .{},
         label_stack: std.ArrayListUnmanaged(Label) = .{},
+        outermost_rest_unreachable: bool = false,
 
         const Local = struct {
             type: wasm.ValType,
@@ -57,6 +59,7 @@ pub fn CodeProcessor(comptime Backend: type) type {
             self.locals.clearRetainingCapacity();
             self.operand_stack.clearRetainingCapacity();
             self.label_stack.clearRetainingCapacity();
+            self.outermost_rest_unreachable = false;
         }
 
         pub fn deinit(self: *@This()) void {
@@ -65,38 +68,38 @@ pub fn CodeProcessor(comptime Backend: type) type {
             self.label_stack.deinit(self.allocator);
         }
 
-        pub fn process(self: *@This(), backend: *Backend, function: wasm.FuncIdx, code: []const u8) !void {
-            const func_type = self.summary.lookUpType(function);
-
-            // Declare local variables for function parameters
-            try self.beforeDeclaringLocals(backend, func_type.parameters.len);
-            for (func_type.parameters) |t| try self.declareLocal(backend, function, t);
-
+        pub fn process(self: *@This(), backend: *Backend, func: wasm.FuncIdx, code: []const u8) !void {
             var decoder = Decoder.init(code);
 
-            // Declare other local variables
+            try self.visitLocals(backend, func, &decoder);
+
+            var instr_visitor = try backend.visitInstrs();
+            defer instr_visitor.deinit();
+            try self.visitInstrs(&instr_visitor, &decoder);
+            try instr_visitor.finish();
+        }
+
+        fn visitLocals(self: *@This(), backend: *Backend, func: wasm.FuncIdx, decoder: *Decoder) !void {
+            var visitor = try backend.visitLocals();
+            defer visitor.deinit();
+
+            // Visit local variables for function parameters
+            const func_type = self.summary.lookUpType(func);
+            try self.locals.ensureUnusedCapacity(self.allocator, func_type.parameters.len);
+            for (func_type.parameters) |t| try self.visitLocal(&visitor, func, t);
+
+            // Visit other local variables
             for (0..try decoder.nextInt(u32)) |_| {
                 const n_locals = try decoder.nextInt(u32);
                 const local_type = try decoder.nextValType();
-                try self.beforeDeclaringLocals(backend, n_locals);
-                for (0..n_locals) |_| try self.declareLocal(backend, function, local_type);
+                try self.locals.ensureUnusedCapacity(self.allocator, n_locals);
+                for (0..n_locals) |_| try self.visitLocal(&visitor, func, local_type);
             }
 
-            if (@hasDecl(Backend, "doneDeclaringLocals")) {
-                try backend.doneDeclaringLocals();
-            }
-
-            // Enter the implicit block surrounding the function body
-            try self.enterBlock(backend, .{ .parameters = &.{}, .results = func_type.results });
+            try visitor.finish();
         }
 
-        fn beforeDeclaringLocals(self: *@This(), backend: *Backend, n_locals: usize) !void {
-            try self.locals.ensureUnusedCapacity(self.allocator, n_locals);
-            if (@hasDecl(Backend, "beforeDeclaringLocals"))
-                try backend.beforeDeclaringLocals(n_locals);
-        }
-
-        fn declareLocal(self: *@This(), backend: *Backend, func: wasm.FuncIdx, typ: wasm.ValType) !void {
+        fn visitLocal(self: *@This(), visitor: anytype, func: wasm.FuncIdx, typ: wasm.ValType) !void {
             const idx = wasm.LocalIdx{
                 .value = std.math.cast(u32, self.locals.items.len) orelse
                     return error.TooManyLocals,
@@ -106,40 +109,66 @@ pub fn CodeProcessor(comptime Backend: type) type {
 
             self.locals.appendAssumeCapacity(.{
                 .type = typ,
-                .backend = try backend.declareLocal(typ, idx, name),
+                .backend = try visitor.visitLocal(typ, idx, name),
             });
         }
 
-        fn enterBlock(self: *@This(), backend: *Backend, typ: wasm.FuncType) !void {
-            try self.label_stack.append(self.allocator, .{
-                .type = typ,
-                .backend = .{ .block = try backend.enterBlock(typ.results) },
-            });
-        }
+        fn visitInstrs(self: *@This(), visitor: anytype, decoder: *Decoder) !void {
+            while (true) switch (try decoder.nextByte()) {
+                opcodes.@"unreachable" => if (!self.restUnreachable()) {
+                    try visitor.visitUnreachable();
+                    self.markRestUnreachable();
+                },
 
-        fn popLabel(self: *@This()) !Label {
-            return self.label_stack.popOrNull() orelse return error.LabelStackUnderflow;
-        }
+                opcodes.nop => {},
 
-        fn opEnd(self: *@This(), backend: *Backend) !void {
-            return switch ((try self.popLabel()).backend) {
-                .block => |b| backend.leaveBlock(b),
-                .loop => |b| backend.leaveLoop(b),
-                .@"if" => |b| backend.leaveIf(b),
-                .@"else" => |b| backend.leaveElse(b),
+                else => return error.UnsupportedOpcode,
             };
+
+            if (!decoder.atEnd())
+                return error.CodeAfterEnd;
+
+            if (!self.outermost_rest_unreachable)
+                @panic("TODO handle implicit trailing return");
+        }
+
+        fn restUnreachable(self: *const @This()) bool {
+            return if (self.label_stack.getLastOrNull()) |l|
+                l.rest_unreachable
+            else
+                self.outermost_rest_unreachable;
+        }
+
+        fn markRestUnreachable(self: *@This()) void {
+            if (self.label_stack.items.len != 0) {
+                self.label_stack.items[self.label_stack.items.len - 1].rest_unreachable = true;
+            } else {
+                self.outermost_rest_unreachable = true;
+            }
         }
     };
 }
 
 const NullBackend = struct {
-    pub fn beforeDeclaringLocals(_: *@This(), _: usize) !void {}
+    pub fn visitLocals(_: *@This()) !struct {
+        pub fn visitLocal(_: *@This(), _: wasm.ValType, _: wasm.LocalIdx, _: ?wasm.Name) !void {}
 
-    pub fn declareLocal(_: *@This(), _: wasm.ValType, _: wasm.LocalIdx, _: ?[]const u8) !void {}
+        pub fn finish(_: *@This()) !void {}
 
-    pub fn doneDeclaringLocals(_: *@This()) !void {}
+        pub fn deinit(_: *@This()) void {}
+    } {
+        return .{};
+    }
 
-    pub fn enterBlock(_: *@This(), _: []const wasm.ValType) !void {}
+    pub fn visitInstrs(_: *@This()) !struct {
+        pub fn visitUnreachable(_: *@This()) !void {}
+
+        pub fn finish(_: *@This()) !void {}
+
+        pub fn deinit(_: *@This()) void {}
+    } {
+        return .{};
+    }
 };
 
 test "ref all with null backend" {
