@@ -121,8 +121,7 @@ pub fn CodeProcessor(comptime Backend: type) type {
             while (true) switch (try decoder.nextByte()) {
                 opcodes.@"unreachable" => {
                     try visitor.visitUnreachable();
-                    if (self.label_stack.items.len == 0) return;
-                    try self.skipUnreachable(visitor, decoder);
+                    if (try self.skipUnreachable(visitor, decoder)) return;
                 },
 
                 opcodes.nop => {},
@@ -137,12 +136,76 @@ pub fn CodeProcessor(comptime Backend: type) type {
                     });
                 },
 
+                opcodes.@"else" => {
+                    if (self.label_stack.items.len == 0) return error.UnbalancedElse;
+                    try self.visitElse(visitor);
+                },
+
                 else => return error.UnsupportedOpcode,
             };
         }
 
-        fn skipUnreachable(self: *@This(), visitor: *BackendInstrVisitor, decoder: *Decoder) !void {
+        fn visitElse(self: *@This(), visitor: *BackendInstrVisitor) !void {
+            const l = self.label_stack.pop();
+            switch (l.backend) {
+                .@"if" => |b| {
+                    var arg_iterator = try visitor.visitElse(b);
+                    defer arg_iterator.deinit();
+
+                    self.operand_stack.shrinkRetainingCapacity(l.min_operand_stack_depth);
+                    for (l.type.parameters) |t| self.operand_stack.appendAssumeCapacity(.{
+                        .type = t,
+                        .backend = try arg_iterator.next(),
+                    });
+
+                    try arg_iterator.finish();
+                },
+
+                else => return error.UnbalancedElse,
+            }
+        }
+
+        fn visitEndBlock(
+            self: *@This(),
+            visitor: *BackendInstrVisitor,
+            backend_block: BackendBlock,
+        ) !void {
+            // TODO
+        }
+
+        fn visitEndLoop(
+            self: *@This(),
+            visitor: *BackendInstrVisitor,
+            backend_loop: BackendLoop,
+        ) !void {
+            // TODO
+        }
+
+        fn visitEndIf(
+            self: *@This(),
+            visitor: *BackendInstrVisitor,
+            backend_if: BackendIf,
+        ) !void {
+            // TODO
+        }
+
+        fn visitEndElse(
+            self: *@This(),
+            visitor: *BackendInstrVisitor,
+            backend_else: BackendElse,
+        ) !void {
+            // TODO
+        }
+
+        // returns true if unreachability extends through the rest of the
+        // function body, false otherwise
+        fn skipUnreachable(self: *@This(), visitor: *BackendInstrVisitor, decoder: *Decoder) !bool {
+            if (self.label_stack.items.len == 0)
+                // The rest of the function is unreachable, so bail out
+                return true;
+
             var additional_label_depth: usize = 0;
+
             while (true) switch (try decoder.nextByte()) {
                 opcodes.block,
                 opcodes.loop,
@@ -153,27 +216,42 @@ pub fn CodeProcessor(comptime Backend: type) type {
                 },
 
                 opcodes.@"else" => if (additional_label_depth == 0) {
-                    const l = self.label_stack.pop();
-                    switch (l.backend) {
-                        .@"if" => |b| {
-                            var arg_iterator = try visitor.visitElse(b);
-                            defer arg_iterator.deinit();
-
-                            self.operand_stack.shrinkRetainingCapacity(l.min_operand_stack_depth);
-                            for (l.type.parameters) |t| self.operand_stack.appendAssumeCapacity(.{
-                                .type = t,
-                                .backend = try arg_iterator.next(),
-                            });
-
-                            try arg_iterator.finish();
-                        },
-
-                        else => return error.UnbalancedElse,
-                    }
+                    try self.visitElse(visitor);
+                    return false;
                 },
 
                 opcodes.end => if (additional_label_depth == 0) {
-                    // TODO
+                    const l = self.label_stack.pop();
+                    switch (l.backend) {
+                        .block => |b| {
+                            try self.visitEndBlock(visitor, b);
+                            return false;
+                        },
+
+                        // Unreachability continues after the end of a loop
+                        // construct, so we should keep skipping code (unless
+                        // we've popped off the last label, in which case we
+                        // need to bail out of the whole function).  We could
+                        // extend this logic by also tracking whether a block or
+                        // if-else is targeted by a reachable branch
+                        // instruction...
+                        .loop => |_| {
+                            if (self.label_stack.items.len == 0)
+                                // The rest of the function is unreachable, so
+                                // bail out
+                                return true;
+                        },
+
+                        .@"if" => |b| {
+                            try self.visitEndIf(visitor, b);
+                            return false;
+                        },
+
+                        .@"else" => |b| {
+                            try self.visitEndElse(visitor, b);
+                            return false;
+                        },
+                    }
                 } else {
                     additional_label_depth -= 1;
                 },
@@ -184,27 +262,173 @@ pub fn CodeProcessor(comptime Backend: type) type {
                 },
 
                 opcodes.@"ref.null" => {
-                    // Using nextRefType() instead of nextByte() to avoid sudden
-                    // breakage should multi-byte reference types be introduced
+                    // Using nextRefType() instead of nextByte() to avoid
+                    // sudden breakage should multi-byte reference types be
+                    // introduced
                     _ = try decoder.nextRefType();
                 },
 
                 opcodes.@"select t" => {
-                    // Using nextValType() instead of nextByte() to avoid sudden
-                    // breakage should multi-byte value types be introduced
+                    // Using nextValType() instead of nextByte() to avoid
+                    // sudden breakage should multi-byte value types be
+                    // introduced
                     for (0..try decoder.nextInt(u32)) |_| _ = try decoder.nextValType();
                 },
 
-                // Single-byte opcodes with no immediates
+                opcodes.@"i32.const" => {
+                    _ = try decoder.nextInt(i32);
+                },
+
+                opcodes.@"i64.const" => {
+                    _ = try decoder.nextInt(i64);
+                },
+
+                opcodes.@"f32.const" => {
+                    _ = try decoder.nextBytes(4);
+                },
+
+                opcodes.@"f64.const" => {
+                    _ = try decoder.nextBytes(8);
+                },
+
+                // No immediates
                 opcodes.@"unreachable",
                 opcodes.nop,
                 opcodes.@"return",
                 opcodes.@"ref.is_null",
                 opcodes.drop,
                 opcodes.select,
+                opcodes.@"i32.eqz",
+                opcodes.@"i32.eq",
+                opcodes.@"i32.ne",
+                opcodes.@"i32.lt_s",
+                opcodes.@"i32.lt_u",
+                opcodes.@"i32.gt_s",
+                opcodes.@"i32.gt_u",
+                opcodes.@"i32.le_s",
+                opcodes.@"i32.le_u",
+                opcodes.@"i32.ge_s",
+                opcodes.@"i32.ge_u",
+                opcodes.@"i64.eqz",
+                opcodes.@"i64.eq",
+                opcodes.@"i64.ne",
+                opcodes.@"i64.lt_s",
+                opcodes.@"i64.lt_u",
+                opcodes.@"i64.gt_s",
+                opcodes.@"i64.gt_u",
+                opcodes.@"i64.le_s",
+                opcodes.@"i64.le_u",
+                opcodes.@"i64.ge_s",
+                opcodes.@"i64.ge_u",
+                opcodes.@"f32.eq",
+                opcodes.@"f32.ne",
+                opcodes.@"f32.lt",
+                opcodes.@"f32.gt",
+                opcodes.@"f32.le",
+                opcodes.@"f32.ge",
+                opcodes.@"f64.eq",
+                opcodes.@"f64.ne",
+                opcodes.@"f64.lt",
+                opcodes.@"f64.gt",
+                opcodes.@"f64.le",
+                opcodes.@"f64.ge",
+                opcodes.@"i32.clz",
+                opcodes.@"i32.ctz",
+                opcodes.@"i32.popcnt",
+                opcodes.@"i32.add",
+                opcodes.@"i32.sub",
+                opcodes.@"i32.mul",
+                opcodes.@"i32.div_s",
+                opcodes.@"i32.div_u",
+                opcodes.@"i32.rem_s",
+                opcodes.@"i32.rem_u",
+                opcodes.@"i32.and",
+                opcodes.@"i32.or",
+                opcodes.@"i32.xor",
+                opcodes.@"i32.shl",
+                opcodes.@"i32.shr_s",
+                opcodes.@"i32.shr_u",
+                opcodes.@"i32.rotl",
+                opcodes.@"i32.rotr",
+                opcodes.@"i64.clz",
+                opcodes.@"i64.ctz",
+                opcodes.@"i64.popcnt",
+                opcodes.@"i64.add",
+                opcodes.@"i64.sub",
+                opcodes.@"i64.mul",
+                opcodes.@"i64.div_s",
+                opcodes.@"i64.div_u",
+                opcodes.@"i64.rem_s",
+                opcodes.@"i64.rem_u",
+                opcodes.@"i64.and",
+                opcodes.@"i64.or",
+                opcodes.@"i64.xor",
+                opcodes.@"i64.shl",
+                opcodes.@"i64.shr_s",
+                opcodes.@"i64.shr_u",
+                opcodes.@"i64.rotl",
+                opcodes.@"i64.rotr",
+                opcodes.@"f32.abs",
+                opcodes.@"f32.neg",
+                opcodes.@"f32.ceil",
+                opcodes.@"f32.floor",
+                opcodes.@"f32.trunc",
+                opcodes.@"f32.nearest",
+                opcodes.@"f32.sqrt",
+                opcodes.@"f32.add",
+                opcodes.@"f32.sub",
+                opcodes.@"f32.mul",
+                opcodes.@"f32.div",
+                opcodes.@"f32.min",
+                opcodes.@"f32.max",
+                opcodes.@"f32.copysign",
+                opcodes.@"f64.abs",
+                opcodes.@"f64.neg",
+                opcodes.@"f64.ceil",
+                opcodes.@"f64.floor",
+                opcodes.@"f64.trunc",
+                opcodes.@"f64.nearest",
+                opcodes.@"f64.sqrt",
+                opcodes.@"f64.add",
+                opcodes.@"f64.sub",
+                opcodes.@"f64.mul",
+                opcodes.@"f64.div",
+                opcodes.@"f64.min",
+                opcodes.@"f64.max",
+                opcodes.@"f64.copysign",
+                opcodes.@"i32.wrap_i64",
+                opcodes.@"i32.trunc_f32_s",
+                opcodes.@"i32.trunc_f32_u",
+                opcodes.@"i32.trunc_f64_s",
+                opcodes.@"i32.trunc_f64_u",
+                opcodes.@"i64.extend_i32_s",
+                opcodes.@"i64.extend_i32_u",
+                opcodes.@"i64.trunc_f32_s",
+                opcodes.@"i64.trunc_f32_u",
+                opcodes.@"i64.trunc_f64_s",
+                opcodes.@"i64.trunc_f64_u",
+                opcodes.@"f32.convert_i32_s",
+                opcodes.@"f32.convert_i32_u",
+                opcodes.@"f32.convert_i64_s",
+                opcodes.@"f32.convert_i64_u",
+                opcodes.@"f32.demote_f64",
+                opcodes.@"f64.convert_i32_s",
+                opcodes.@"f64.convert_i32_u",
+                opcodes.@"f64.convert_i64_s",
+                opcodes.@"f64.convert_i64_u",
+                opcodes.@"f64.promote_f32",
+                opcodes.@"i32.reinterpret_f32",
+                opcodes.@"i64.reinterpret_f64",
+                opcodes.@"f32.reinterpret_i32",
+                opcodes.@"f64.reinterpret_i64",
+                opcodes.@"i32.extend8_s",
+                opcodes.@"i32.extend16_s",
+                opcodes.@"i64.extend8_s",
+                opcodes.@"i64.extend16_s",
+                opcodes.@"i64.extend32_s",
                 => {},
 
-                // Single-byte opcodes with a single u32 immediate
+                // 1 u32 immediate
                 opcodes.br,
                 opcodes.br_if,
                 opcodes.call,
@@ -216,11 +440,13 @@ pub fn CodeProcessor(comptime Backend: type) type {
                 opcodes.@"global.set",
                 opcodes.@"table.get",
                 opcodes.@"table.set",
+                opcodes.@"memory.size",
+                opcodes.@"memory.grow",
                 => {
                     _ = try decoder.nextInt(u32);
                 },
 
-                // Single-byte opcodes with two u32 immediates
+                // 2 u32 immediates
                 opcodes.call_indirect,
                 opcodes.@"i32.load",
                 opcodes.@"i64.load",
@@ -248,6 +474,318 @@ pub fn CodeProcessor(comptime Backend: type) type {
                 => {
                     _ = try decoder.nextInt(u32);
                     _ = try decoder.nextInt(u32);
+                },
+
+                opcodes.general_prefix => switch (try decoder.nextInt(u32)) {
+                    // No immediates
+                    opcodes.@"i32.trunc_sat_f32_s",
+                    opcodes.@"i32.trunc_sat_f32_u",
+                    opcodes.@"i32.trunc_sat_f64_s",
+                    opcodes.@"i32.trunc_sat_f64_u",
+                    opcodes.@"i64.trunc_sat_f32_s",
+                    opcodes.@"i64.trunc_sat_f32_u",
+                    opcodes.@"i64.trunc_sat_f64_s",
+                    opcodes.@"i64.trunc_sat_f64_u",
+                    => {},
+
+                    // 1 u32 immediate
+                    opcodes.@"data.drop",
+                    opcodes.@"memory.fill",
+                    opcodes.@"elem.drop",
+                    opcodes.@"table.grow",
+                    opcodes.@"table.size",
+                    opcodes.@"table.fill",
+                    => {
+                        _ = try decoder.nextInt(u32);
+                    },
+
+                    // 2 u32 immediates
+                    opcodes.@"memory.init",
+                    opcodes.@"memory.copy",
+                    opcodes.@"table.init",
+                    opcodes.@"table.copy",
+                    => {
+                        _ = try decoder.nextInt(u32);
+                        _ = try decoder.nextInt(u32);
+                    },
+
+                    else => return error.UnsupportedOpcode,
+                },
+
+                opcodes.simd_prefix => switch (try decoder.nextInt(u32)) {
+                    // No immediates
+                    opcodes.@"i8x16.swizzle",
+                    opcodes.@"i8x16.splat",
+                    opcodes.@"i16x8.splat",
+                    opcodes.@"i32x4.splat",
+                    opcodes.@"i64x2.splat",
+                    opcodes.@"f32x4.splat",
+                    opcodes.@"f64x2.splat",
+                    opcodes.@"i8x16.eq",
+                    opcodes.@"i8x16.ne",
+                    opcodes.@"i8x16.lt_s",
+                    opcodes.@"i8x16.lt_u",
+                    opcodes.@"i8x16.gt_s",
+                    opcodes.@"i8x16.gt_u",
+                    opcodes.@"i8x16.le_s",
+                    opcodes.@"i8x16.le_u",
+                    opcodes.@"i8x16.ge_s",
+                    opcodes.@"i8x16.ge_u",
+                    opcodes.@"i16x8.eq",
+                    opcodes.@"i16x8.ne",
+                    opcodes.@"i16x8.lt_s",
+                    opcodes.@"i16x8.lt_u",
+                    opcodes.@"i16x8.gt_s",
+                    opcodes.@"i16x8.gt_u",
+                    opcodes.@"i16x8.le_s",
+                    opcodes.@"i16x8.le_u",
+                    opcodes.@"i16x8.ge_s",
+                    opcodes.@"i16x8.ge_u",
+                    opcodes.@"i32x4.eq",
+                    opcodes.@"i32x4.ne",
+                    opcodes.@"i32x4.lt_s",
+                    opcodes.@"i32x4.lt_u",
+                    opcodes.@"i32x4.gt_s",
+                    opcodes.@"i32x4.gt_u",
+                    opcodes.@"i32x4.le_s",
+                    opcodes.@"i32x4.le_u",
+                    opcodes.@"i32x4.ge_s",
+                    opcodes.@"i32x4.ge_u",
+                    opcodes.@"f32x4.eq",
+                    opcodes.@"f32x4.ne",
+                    opcodes.@"f32x4.lt",
+                    opcodes.@"f32x4.gt",
+                    opcodes.@"f32x4.le",
+                    opcodes.@"f32x4.ge",
+                    opcodes.@"f64x2.eq",
+                    opcodes.@"f64x2.ne",
+                    opcodes.@"f64x2.lt",
+                    opcodes.@"f64x2.gt",
+                    opcodes.@"f64x2.le",
+                    opcodes.@"f64x2.ge",
+                    opcodes.@"v128.not",
+                    opcodes.@"v128.and",
+                    opcodes.@"v128.andnot",
+                    opcodes.@"v128.or",
+                    opcodes.@"v128.xor",
+                    opcodes.@"v128.bitselect",
+                    opcodes.@"v128.any_true",
+                    opcodes.@"v128.load8_lane",
+                    opcodes.@"v128.load16_lane",
+                    opcodes.@"v128.load32_lane",
+                    opcodes.@"v128.load64_lane",
+                    opcodes.@"v128.store8_lane",
+                    opcodes.@"v128.store16_lane",
+                    opcodes.@"v128.store32_lane",
+                    opcodes.@"v128.store64_lane",
+                    opcodes.@"v128.load32_zero",
+                    opcodes.@"v128.load64_zero",
+                    opcodes.@"f32x4.demote_f64x2_zero",
+                    opcodes.@"f64x2.promote_low_f32x4",
+                    opcodes.@"i8x16.abs",
+                    opcodes.@"i8x16.neg",
+                    opcodes.@"i8x16.popcnt",
+                    opcodes.@"i8x16.all_true",
+                    opcodes.@"i8x16.bitmask",
+                    opcodes.@"i8x16.narrow_i16x8_s",
+                    opcodes.@"i8x16.narrow_i16x8_u",
+                    opcodes.@"i8x16.shl",
+                    opcodes.@"i8x16.shr_s",
+                    opcodes.@"i8x16.shr_u",
+                    opcodes.@"i8x16.add",
+                    opcodes.@"i8x16.add_sat_s",
+                    opcodes.@"i8x16.add_sat_u",
+                    opcodes.@"i8x16.sub",
+                    opcodes.@"i8x16.sub_sat_s",
+                    opcodes.@"i8x16.sub_sat_u",
+                    opcodes.@"i8x16.min_s",
+                    opcodes.@"i8x16.min_u",
+                    opcodes.@"i8x16.max_s",
+                    opcodes.@"i8x16.max_u",
+                    opcodes.@"i8x16.avgr_u",
+                    opcodes.@"i16x8.extadd_pairwise_i8x16_s",
+                    opcodes.@"i16x8.extadd_pairwise_i8x16_u",
+                    opcodes.@"i32x4.extadd_pairwise_i16x8_s",
+                    opcodes.@"i32x4.extadd_pairwise_i16x8_u",
+                    opcodes.@"i16x8.abs",
+                    opcodes.@"i16x8.neg",
+                    opcodes.@"i16x8.q15mulr_sat_s",
+                    opcodes.@"i16x8.all_true",
+                    opcodes.@"i16x8.bitmask",
+                    opcodes.@"i16x8.narrow_i32x4_s",
+                    opcodes.@"i16x8.narrow_i32x4_u",
+                    opcodes.@"i16x8.extend_low_i8x16_s",
+                    opcodes.@"i16x8.extend_high_i8x16_s",
+                    opcodes.@"i16x8.extend_low_i8x16_u",
+                    opcodes.@"i16x8.extend_high_i8x16_u",
+                    opcodes.@"i16x8.shl",
+                    opcodes.@"i16x8.shr_s",
+                    opcodes.@"i16x8.shr_u",
+                    opcodes.@"i16x8.add",
+                    opcodes.@"i16x8.add_sat_s",
+                    opcodes.@"i16x8.add_sat_u",
+                    opcodes.@"i16x8.sub",
+                    opcodes.@"i16x8.sub_sat_s",
+                    opcodes.@"i16x8.sub_sat_u",
+                    opcodes.@"i16x8.mul",
+                    opcodes.@"i16x8.min_s",
+                    opcodes.@"i16x8.min_u",
+                    opcodes.@"i16x8.max_s",
+                    opcodes.@"i16x8.max_u",
+                    opcodes.@"i16x8.avgr_u",
+                    opcodes.@"i16x8.extmul_low_i8x16_s",
+                    opcodes.@"i16x8.extmul_high_i8x16_s",
+                    opcodes.@"i16x8.extmul_low_i8x16_u",
+                    opcodes.@"i16x8.extmul_high_i8x16_u",
+                    opcodes.@"i32x4.abs",
+                    opcodes.@"i32x4.neg",
+                    opcodes.@"i32x4.all_true",
+                    opcodes.@"i32x4.bitmask",
+                    opcodes.@"i32x4.extend_low_i16x8_s",
+                    opcodes.@"i32x4.extend_high_i16x8_s",
+                    opcodes.@"i32x4.extend_low_i16x8_u",
+                    opcodes.@"i32x4.extend_high_i16x8_u",
+                    opcodes.@"i32x4.shl",
+                    opcodes.@"i32x4.shr_s",
+                    opcodes.@"i32x4.shr_u",
+                    opcodes.@"i32x4.add",
+                    opcodes.@"i32x4.sub",
+                    opcodes.@"i32x4.mul",
+                    opcodes.@"i32x4.min_s",
+                    opcodes.@"i32x4.min_u",
+                    opcodes.@"i32x4.max_s",
+                    opcodes.@"i32x4.max_u",
+                    opcodes.@"i32x4.dot_i16x8_s",
+                    opcodes.@"i32x4.extmul_low_i16x8_s",
+                    opcodes.@"i32x4.extmul_high_i16x8_s",
+                    opcodes.@"i32x4.extmul_low_i16x8_u",
+                    opcodes.@"i32x4.extmul_high_i16x8_u",
+                    opcodes.@"i64x2.abs",
+                    opcodes.@"i64x2.neg",
+                    opcodes.@"i64x2.all_true",
+                    opcodes.@"i64x2.bitmask",
+                    opcodes.@"i64x2.extend_low_i32x4_s",
+                    opcodes.@"i64x2.extend_high_i32x4_s",
+                    opcodes.@"i64x2.extend_low_i32x4_u",
+                    opcodes.@"i64x2.extend_high_i32x4_u",
+                    opcodes.@"i64x2.shl",
+                    opcodes.@"i64x2.shr_s",
+                    opcodes.@"i64x2.shr_u",
+                    opcodes.@"i64x2.add",
+                    opcodes.@"i64x2.sub",
+                    opcodes.@"i64x2.mul",
+                    opcodes.@"i64x2.eq",
+                    opcodes.@"i64x2.ne",
+                    opcodes.@"i64x2.lt_s",
+                    opcodes.@"i64x2.gt_s",
+                    opcodes.@"i64x2.le_s",
+                    opcodes.@"i64x2.ge_s",
+                    opcodes.@"i64x2.extmul_low_i32x4_s",
+                    opcodes.@"i64x2.extmul_high_i32x4_s",
+                    opcodes.@"i64x2.extmul_low_i32x4_u",
+                    opcodes.@"i64x2.extmul_high_i32x4_u",
+                    opcodes.@"f32x4.ceil",
+                    opcodes.@"f32x4.floor",
+                    opcodes.@"f32x4.trunc",
+                    opcodes.@"f32x4.nearest",
+                    opcodes.@"f64x2.ceil",
+                    opcodes.@"f64x2.floor",
+                    opcodes.@"f64x2.trunc",
+                    opcodes.@"f64x2.nearest",
+                    opcodes.@"f32x4.abs",
+                    opcodes.@"f32x4.neg",
+                    opcodes.@"f32x4.sqrt",
+                    opcodes.@"f32x4.add",
+                    opcodes.@"f32x4.sub",
+                    opcodes.@"f32x4.mul",
+                    opcodes.@"f32x4.div",
+                    opcodes.@"f32x4.min",
+                    opcodes.@"f32x4.max",
+                    opcodes.@"f32x4.pmin",
+                    opcodes.@"f32x4.pmax",
+                    opcodes.@"f64x2.abs",
+                    opcodes.@"f64x2.neg",
+                    opcodes.@"f64x2.sqrt",
+                    opcodes.@"f64x2.add",
+                    opcodes.@"f64x2.sub",
+                    opcodes.@"f64x2.mul",
+                    opcodes.@"f64x2.div",
+                    opcodes.@"f64x2.min",
+                    opcodes.@"f64x2.max",
+                    opcodes.@"f64x2.pmin",
+                    opcodes.@"f64x2.pmax",
+                    opcodes.@"i32x4.trunc_sat_f32x4_s",
+                    opcodes.@"i32x4.trunc_sat_f32x4_u",
+                    opcodes.@"f32x4.convert_i32x4_s",
+                    opcodes.@"f32x4.convert_i32x4_u",
+                    opcodes.@"i32x4.trunc_sat_f64x2_s_zero",
+                    opcodes.@"i32x4.trunc_sat_f64x2_u_zero",
+                    opcodes.@"f64x2.convert_low_i32x4_s",
+                    opcodes.@"f64x2.convert_low_i32x4_u",
+                    => {},
+
+                    // 1-byte immediate
+                    opcodes.@"i8x16.extract_lane_s",
+                    opcodes.@"i8x16.extract_lane_u",
+                    opcodes.@"i8x16.replace_lane",
+                    opcodes.@"i16x8.extract_lane_s",
+                    opcodes.@"i16x8.extract_lane_u",
+                    opcodes.@"i16x8.replace_lane",
+                    opcodes.@"i32x4.extract_lane",
+                    opcodes.@"i32x4.replace_lane",
+                    opcodes.@"i64x2.extract_lane",
+                    opcodes.@"i64x2.replace_lane",
+                    opcodes.@"f32x4.extract_lane",
+                    opcodes.@"f32x4.replace_lane",
+                    opcodes.@"f64x2.extract_lane",
+                    opcodes.@"f64x2.replace_lane",
+                    => {
+                        _ = try decoder.nextByte();
+                    },
+
+                    // 16-byte immediate
+                    opcodes.@"v128.const",
+                    opcodes.@"i8x16.shuffle",
+                    => {
+                        _ = try decoder.nextBytes(16);
+                    },
+
+                    // 2 u32 immediates
+                    opcodes.@"v128.load",
+                    opcodes.@"v128.load8x8_s",
+                    opcodes.@"v128.load8x8_u",
+                    opcodes.@"v128.load16x4_s",
+                    opcodes.@"v128.load16x4_u",
+                    opcodes.@"v128.load32x2_s",
+                    opcodes.@"v128.load32x2_u",
+                    opcodes.@"v128.load8_splat",
+                    opcodes.@"v128.load16_splat",
+                    opcodes.@"v128.load32_splat",
+                    opcodes.@"v128.load64_splat",
+                    opcodes.@"v128.store",
+                    opcodes.@"v128.load32_zero",
+                    opcodes.@"v128.load64_zero",
+                    => {
+                        _ = try decoder.nextInt(u32);
+                        _ = try decoder.nextInt(u32);
+                    },
+
+                    // 2 u32 immediates followed by a 1-byte immediate
+                    opcodes.@"v128.load8_lane",
+                    opcodes.@"v128.load16_lane",
+                    opcodes.@"v128.load32_lane",
+                    opcodes.@"v128.load64_lane",
+                    opcodes.@"v128.store8_lane",
+                    opcodes.@"v128.store16_lane",
+                    opcodes.@"v128.store32_lane",
+                    opcodes.@"v128.store64_lane",
+                    => {
+                        _ = try decoder.nextInt(u32);
+                        _ = try decoder.nextInt(u32);
+                        _ = try decoder.nextByte();
+                    },
+
+                    else => return error.UnsupportedOpcode,
                 },
 
                 else => return error.UnsupportedOpcode,
