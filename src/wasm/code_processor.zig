@@ -12,7 +12,6 @@ pub fn CodeProcessor(comptime Backend: type) type {
         locals: std.ArrayListUnmanaged(Local) = .{},
         operand_stack: std.ArrayListUnmanaged(Operand) = .{},
         label_stack: std.ArrayListUnmanaged(Label) = .{},
-        outermost_rest_unreachable: bool = false,
 
         const Local = struct {
             type: wasm.ValType,
@@ -26,6 +25,7 @@ pub fn CodeProcessor(comptime Backend: type) type {
 
         const Label = struct {
             type: wasm.FuncType,
+            min_operand_stack_depth: usize,
 
             backend: union(enum) {
                 block: BackendBlock,
@@ -33,8 +33,6 @@ pub fn CodeProcessor(comptime Backend: type) type {
                 @"if": BackendIf,
                 @"else": BackendElse,
             },
-
-            rest_unreachable: bool = false,
         };
 
         const BackendOperand = getBackendType("Operand");
@@ -121,36 +119,181 @@ pub fn CodeProcessor(comptime Backend: type) type {
 
         fn visitInstrs(self: *@This(), visitor: *BackendInstrVisitor, decoder: *Decoder) !void {
             while (true) switch (try decoder.nextByte()) {
-                opcodes.@"unreachable" => if (!self.restUnreachable()) {
+                opcodes.@"unreachable" => {
                     try visitor.visitUnreachable();
-                    self.markRestUnreachable();
+                    if (self.label_stack.items.len == 0) return;
+                    try self.skipUnreachable(visitor, decoder);
                 },
 
                 opcodes.nop => {},
 
+                opcodes.block => {
+                    const ty = try self.nextBlockType(decoder);
+                    try self.checkOperandStackTypes(ty.parameters);
+                    try self.label_stack.append(self.allocator, .{
+                        .type = ty,
+                        .min_operand_stack_depth = self.operand_stack.items.len - ty.parameters.len,
+                        .backend = .{ .block = try visitor.visitBlock(ty.results) },
+                    });
+                },
+
                 else => return error.UnsupportedOpcode,
             };
-
-            if (!decoder.atEnd())
-                return error.CodeAfterEnd;
-
-            if (!self.outermost_rest_unreachable)
-                @panic("TODO handle implicit trailing return");
         }
 
-        fn restUnreachable(self: *const @This()) bool {
+        fn skipUnreachable(self: *@This(), visitor: *BackendInstrVisitor, decoder: *Decoder) !void {
+            var additional_label_depth: usize = 0;
+            while (true) switch (try decoder.nextByte()) {
+                opcodes.block,
+                opcodes.loop,
+                opcodes.@"if",
+                => {
+                    _ = try self.nextBlockType(decoder);
+                    additional_label_depth = try std.math.add(usize, additional_label_depth, 1);
+                },
+
+                opcodes.@"else" => if (additional_label_depth == 0) {
+                    const l = self.label_stack.pop();
+                    switch (l.backend) {
+                        .@"if" => |b| {
+                            var arg_iterator = try visitor.visitElse(b);
+                            defer arg_iterator.deinit();
+
+                            self.operand_stack.shrinkRetainingCapacity(l.min_operand_stack_depth);
+                            for (l.type.parameters) |t| self.operand_stack.appendAssumeCapacity(.{
+                                .type = t,
+                                .backend = try arg_iterator.next(),
+                            });
+
+                            try arg_iterator.finish();
+                        },
+
+                        else => return error.UnbalancedElse,
+                    }
+                },
+
+                opcodes.end => if (additional_label_depth == 0) {
+                    // TODO
+                } else {
+                    additional_label_depth -= 1;
+                },
+
+                opcodes.br_table => {
+                    for (0..try decoder.nextInt(u32)) |_| _ = try decoder.nextInt(u32);
+                    _ = try decoder.nextInt(u32);
+                },
+
+                opcodes.@"ref.null" => {
+                    // Using nextRefType() instead of nextByte() to avoid sudden
+                    // breakage should multi-byte reference types be introduced
+                    _ = try decoder.nextRefType();
+                },
+
+                opcodes.@"select t" => {
+                    // Using nextValType() instead of nextByte() to avoid sudden
+                    // breakage should multi-byte value types be introduced
+                    for (0..try decoder.nextInt(u32)) |_| _ = try decoder.nextValType();
+                },
+
+                // Single-byte opcodes with no immediates
+                opcodes.@"unreachable",
+                opcodes.nop,
+                opcodes.@"return",
+                opcodes.@"ref.is_null",
+                opcodes.drop,
+                opcodes.select,
+                => {},
+
+                // Single-byte opcodes with a single u32 immediate
+                opcodes.br,
+                opcodes.br_if,
+                opcodes.call,
+                opcodes.@"ref.func",
+                opcodes.@"local.get",
+                opcodes.@"local.set",
+                opcodes.@"local.tee",
+                opcodes.@"global.get",
+                opcodes.@"global.set",
+                opcodes.@"table.get",
+                opcodes.@"table.set",
+                => {
+                    _ = try decoder.nextInt(u32);
+                },
+
+                // Single-byte opcodes with two u32 immediates
+                opcodes.call_indirect,
+                opcodes.@"i32.load",
+                opcodes.@"i64.load",
+                opcodes.@"f32.load",
+                opcodes.@"f64.load",
+                opcodes.@"i32.load8_s",
+                opcodes.@"i32.load8_u",
+                opcodes.@"i32.load16_s",
+                opcodes.@"i32.load16_u",
+                opcodes.@"i64.load8_s",
+                opcodes.@"i64.load8_u",
+                opcodes.@"i64.load16_s",
+                opcodes.@"i64.load16_u",
+                opcodes.@"i64.load32_s",
+                opcodes.@"i64.load32_u",
+                opcodes.@"i32.store",
+                opcodes.@"i64.store",
+                opcodes.@"f32.store",
+                opcodes.@"f64.store",
+                opcodes.@"i32.store8",
+                opcodes.@"i32.store16",
+                opcodes.@"i64.store8",
+                opcodes.@"i64.store16",
+                opcodes.@"i64.store32",
+                => {
+                    _ = try decoder.nextInt(u32);
+                    _ = try decoder.nextInt(u32);
+                },
+
+                else => return error.UnsupportedOpcode,
+            };
+        }
+
+        fn nextBlockType(self: *@This(), decoder: *Decoder) !wasm.FuncType {
+            return switch (try decoder.peekByte()) {
+                0x40 => .{
+                    .parameters = &.{},
+                    .results = &.{},
+                },
+
+                inline 0x6f, 0x70, 0x7b...0x7f => |b| comptime .{
+                    .parameters = &.{},
+                    .results = &.{@intToEnum(wasm.ValType, b)},
+                },
+
+                else => self.summary.lookUp(
+                    try self.summary.validateIdx(
+                        wasm.TypeIdx{
+                            .value = std.math.cast(u32, try decoder.nextInt(i33)) orelse
+                                return error.TypeIndexOutOfRange,
+                        },
+                    ),
+                ),
+            };
+        }
+
+        fn checkOperandStackTypes(self: *const @This(), expected: []const wasm.ValType) !void {
+            if (expected.len == 0)
+                return;
+
+            if (expected.len > self.usableOperandStackDepth())
+                return error.OperandStackUnderflow;
+
+            for (self.operand_stack.items[self.operand_stack.items.len - expected.len ..], expected) |a, e|
+                if (a.type != e)
+                    return error.TypeMismatch;
+        }
+
+        fn usableOperandStackDepth(self: *const @This()) usize {
             return if (self.label_stack.getLastOrNull()) |l|
-                l.rest_unreachable
+                self.label_stack.items.len - l.min_operand_stack_depth
             else
-                self.outermost_rest_unreachable;
-        }
-
-        fn markRestUnreachable(self: *@This()) void {
-            if (self.label_stack.items.len != 0) {
-                self.label_stack.items[self.label_stack.items.len - 1].rest_unreachable = true;
-            } else {
-                self.outermost_rest_unreachable = true;
-            }
+                self.label_stack.items.len;
         }
     };
 }

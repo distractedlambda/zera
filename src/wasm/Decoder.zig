@@ -17,6 +17,11 @@ pub fn nextByte(self: *@This()) !u8 {
     return self.data[0];
 }
 
+pub fn peekByte(self: *@This()) !u8 {
+    if (self.data.len == 0) return error.UnexpectedEndOfData;
+    return self.data[0];
+}
+
 pub fn nextBytes(self: *@This(), len: anytype) !(switch (@typeInfo(@TypeOf(len))) {
     .ComptimeInt => *const [len]u8,
 
@@ -218,31 +223,31 @@ test "single-byte negative i32" {
 }
 
 test "dual-byte u32" {
-    var decoder = init(&.{0xa4, 0x03});
+    var decoder = init(&.{ 0xa4, 0x03 });
     try std.testing.expectEqual(@as(u32, 420), try decoder.nextInt(u32));
     try std.testing.expect(decoder.atEnd());
 }
 
 test "this dual-byte u32 could've been a single byte" {
-    var decoder = init(&.{0xc5, 0x00});
+    var decoder = init(&.{ 0xc5, 0x00 });
     try std.testing.expectEqual(@as(u32, 69), try decoder.nextInt(u32));
     try std.testing.expect(decoder.atEnd());
 }
 
 test "triple-byte u32" {
-    var decoder = init(&.{0xd5, 0xc8, 0x02});
+    var decoder = init(&.{ 0xd5, 0xc8, 0x02 });
     try std.testing.expectEqual(@as(u32, 42069), try decoder.nextInt(u32));
     try std.testing.expect(decoder.atEnd());
 }
 
 test "max u32" {
-    var decoder = init(&.{0xff, 0xff, 0xff, 0xff, 0x0f});
+    var decoder = init(&.{ 0xff, 0xff, 0xff, 0xff, 0x0f });
     try std.testing.expectEqual(@as(u32, std.math.maxInt(u32)), try decoder.nextInt(u32));
     try std.testing.expect(decoder.atEnd());
 }
 
 test "u32 overflow" {
-    var decoder = init(&.{0xff, 0xff, 0xff, 0xff, 0x1f});
+    var decoder = init(&.{ 0xff, 0xff, 0xff, 0xff, 0x1f });
     try std.testing.expectError(error.Overflow, decoder.nextInt(u32));
 }
 
