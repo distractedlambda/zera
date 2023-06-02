@@ -13,34 +13,37 @@ pub fn CodeProcessor(comptime Backend: type) type {
         operand_stack: std.ArrayListUnmanaged(Operand) = .{},
         label_stack: std.ArrayListUnmanaged(Label) = .{},
 
-        const Local = struct {
-            type: wasm.ValType,
-            backend: BackendLocal,
-        };
-
         const Operand = struct {
             type: wasm.ValType,
             backend: BackendOperand,
         };
 
+        const Local = struct {
+            type: wasm.ValType,
+            backend: BackendLocal,
+        };
+
         const Label = struct {
             type: wasm.FuncType,
             min_operand_stack_depth: usize,
+            target: Target,
 
-            backend: union(enum) {
-                block: BackendBlock,
-                loop: BackendLoop,
-                @"if": BackendIf,
-                @"else": BackendElse,
-            },
+            const Target = union(enum) {
+                block: BackendLabel,
+                loop: BackendLabel,
+                @"if": If,
+                @"else": BackendLabel,
+
+                const If = struct {
+                    @"else": BackendLabel,
+                    end: BackendLabel,
+                };
+            };
         };
 
         const BackendOperand = getBackendType("Operand");
         const BackendLocal = getBackendType("Local");
-        const BackendBlock = getBackendType("Block");
-        const BackendLoop = getBackendType("Loop");
-        const BackendIf = getBackendType("If");
-        const BackendElse = getBackendType("Else");
+        const BackendLabel = getBackendType("Label");
         const BackendLocalVisitor = getBackendVisitorType("visitLocals");
         const BackendInstrVisitor = getBackendVisitorType("visitInstrs");
 
@@ -63,7 +66,6 @@ pub fn CodeProcessor(comptime Backend: type) type {
             self.locals.clearRetainingCapacity();
             self.operand_stack.clearRetainingCapacity();
             self.label_stack.clearRetainingCapacity();
-            self.outermost_rest_unreachable = false;
         }
 
         pub fn deinit(self: *@This()) void {
@@ -113,7 +115,7 @@ pub fn CodeProcessor(comptime Backend: type) type {
 
             self.locals.appendAssumeCapacity(.{
                 .type = typ,
-                .backend = try visitor.visitLocal(typ, idx, name),
+                .backend = try visitor.visitLocal(typ, name),
             });
         }
 
@@ -128,17 +130,76 @@ pub fn CodeProcessor(comptime Backend: type) type {
 
                 opcodes.block => {
                     const ty = try self.nextBlockType(decoder);
-                    try self.checkOperandStackTypes(ty.parameters);
+                    const min_depth = try self.checkEntryTypes(ty.parameters);
                     try self.label_stack.append(self.allocator, .{
                         .type = ty,
-                        .min_operand_stack_depth = self.operand_stack.items.len - ty.parameters.len,
-                        .backend = .{ .block = try visitor.visitBlock(ty.results) },
+                        .min_operand_stack_depth = min_depth,
+                        .target = .{ .block = try visitor.declareForwardLabel(ty.results) },
                     });
                 },
 
+                opcodes.loop => {
+                    const ty = try self.nextBlockType(decoder);
+                    const min_depth = try self.checkEntryTypes(ty.parameters);
+                    try self.label_stack.append(self.allocator, .{
+                        .type = ty,
+                        .min_operand_stack_depth = min_depth,
+                        .target = .{ .loop = blk: {
+                            const label_visitor = try visitor.visitBackwardLabel(ty.results);
+                            defer label_visitor.deinit();
+
+                            for (self.operand_stack.items[min_depth..]) |*o|
+                                o.backend = try label_visitor.visitArg(o.backend);
+
+                            break :blk try label_visitor.finish();
+                        } },
+                    });
+                },
+
+                opcodes.@"if" => {
+                    const ty = try self.nextBlockType(decoder);
+                    const condition = try self.popOperand(.i32);
+                    const min_depth = try self.checkEntryTypes(ty.parameters);
+                    const else_target = try visitor.declareForwardLabel(ty.parameters);
+                    const end_target = try visitor.declareForwardLabel(ty.results);
+
+                    const inv_condition = try visitor.visitI32Xor(
+                        condition,
+                        try visitor.visitI32Const(@as(i32, -1)),
+                    );
+
+                    try self.label_stack.append(self.allocator, .{
+                        .type = ty,
+                        .min_operand_stack_depth = min_depth,
+                        .target = .{ .@"if" = .{ .@"else" = else_target, .end = end_target } },
+                    });
+
+                    var else_arg_visitor = try visitor.visitBrIf(else_target, inv_condition);
+                    defer else_arg_visitor.deinit();
+
+                    for (self.operand_stack.items[min_depth..]) |o|
+                        try else_arg_visitor.visitArg(o.backend);
+
+                    try else_arg_visitor.finish();
+                },
+
                 opcodes.@"else" => {
-                    if (self.label_stack.items.len == 0) return error.UnbalancedElse;
-                    try self.visitElse(visitor);
+                    const l = self.label_stack.popOrNull() orelse
+                        return error.UnbalancedElse;
+
+                    try self.checkExitTypes(l);
+
+                    switch (l.target) {
+                        .@"if" => |target| {
+                            var label_visitor = try visitor.visitForwardLabel(target.@"else");
+                            // TODO branch to else
+                            // TODO branch to end
+                        },
+
+                        else => return error.UnbalancedElse,
+                    }
+
+                    self.operand_stack.shrinkRetainingCapacity(l.min_operand_stack_depth);
                 },
 
                 else => return error.UnsupportedOpcode,
@@ -148,18 +209,21 @@ pub fn CodeProcessor(comptime Backend: type) type {
         fn visitElse(self: *@This(), visitor: *BackendInstrVisitor) !void {
             const l = self.label_stack.pop();
             switch (l.backend) {
-                .@"if" => |b| {
-                    var arg_iterator = try visitor.visitElse(b);
-                    defer arg_iterator.deinit();
+                .@"if" => |if_backend| self.label_stack.appendAssumeCapacity(.{
+                    .type = l.type,
+                    .min_operand_stack_depth = l.min_operand_stack_depth,
+                    .backend = .{ .@"else" = blk: {
+                        const results = self.operand_stack.items[l.min_operand_stack_depth..];
 
-                    self.operand_stack.shrinkRetainingCapacity(l.min_operand_stack_depth);
-                    for (l.type.parameters) |t| self.operand_stack.appendAssumeCapacity(.{
-                        .type = t,
-                        .backend = try arg_iterator.next(),
-                    });
+                        if (results.len != l.type.results)
+                            return error.BadOperandStack;
 
-                    try arg_iterator.finish();
-                },
+                        const results_buffer = try self.scratchAlloc(BackendOperand, results.len);
+                        for (results, l.type.results) |res, i| {}
+
+                        errdefer self.allocator.free(results);
+                    } },
+                }),
 
                 else => return error.UnbalancedElse,
             }
@@ -235,12 +299,10 @@ pub fn CodeProcessor(comptime Backend: type) type {
                         // extend this logic by also tracking whether a block or
                         // if-else is targeted by a reachable branch
                         // instruction...
-                        .loop => |_| {
-                            if (self.label_stack.items.len == 0)
-                                // The rest of the function is unreachable, so
-                                // bail out
-                                return true;
-                        },
+                        .loop => |_| if (self.label_stack.items.len == 0)
+                            // The rest of the function is unreachable, so
+                            // bail out
+                            return true,
 
                         .@"if" => |b| {
                             try self.visitEndIf(visitor, b);
@@ -815,16 +877,32 @@ pub fn CodeProcessor(comptime Backend: type) type {
             };
         }
 
-        fn checkOperandStackTypes(self: *const @This(), expected: []const wasm.ValType) !void {
+        fn checkEntryTypes(self: *const @This(), expected: []const wasm.ValType) !usize {
             if (expected.len == 0)
                 return;
 
             if (expected.len > self.usableOperandStackDepth())
                 return error.OperandStackUnderflow;
 
-            for (self.operand_stack.items[self.operand_stack.items.len - expected.len ..], expected) |a, e|
+            const min_depth = self.operand_stack.items.len - expected.len;
+
+            for (self.operand_stack.items[min_depth..], expected) |a, e|
                 if (a.type != e)
                     return error.TypeMismatch;
+
+            return min_depth;
+        }
+
+        fn checkExitTypes(self: *const @This(), label: Label) !void {
+            const top_operands = self.operand_stack.items[label.min_operand_stack_depth..];
+
+            if (top_operands.len < label.type.results.len)
+                return error.OperandStackUnderflow
+            else if (top_operands.len > label.type.results.len)
+                return error.OperandStackOverflow;
+
+            for (top_operands, label.type.results) |o, t|
+                if (o.type != t) return error.TypeMismatch;
         }
 
         fn usableOperandStackDepth(self: *const @This()) usize {
@@ -833,26 +911,126 @@ pub fn CodeProcessor(comptime Backend: type) type {
             else
                 self.label_stack.items.len;
         }
+
+        fn popOperand(self: *@This(), expected_type: wasm.ValType) !BackendOperand {
+            if (self.usableOperandStackDepth() == 0)
+                return error.OperandStackUnderflow;
+
+            const op = self.operand_stack.pop();
+
+            if (op.type != expected_type)
+                return error.TypeMismatch;
+
+            return op.backend;
+        }
     };
 }
 
 const NullBackend = struct {
-    pub fn visitLocals(_: *@This()) !struct {
-        pub fn visitLocal(_: *@This(), _: wasm.ValType, _: wasm.LocalIdx, _: ?wasm.Name) !void {}
+    pub const Local = struct {};
 
+    pub const Operand = struct {};
+
+    pub const Label = struct {};
+
+    pub fn visitLocals(_: *@This()) !struct {
         pub fn finish(_: *@This()) !void {}
 
         pub fn deinit(_: *@This()) void {}
+
+        pub fn visitLocal(_: *@This(), _: wasm.ValType, _: ?wasm.Name) !Local {
+            return .{};
+        }
     } {
         return .{};
     }
 
     pub fn visitInstrs(_: *@This()) !struct {
-        pub fn visitUnreachable(_: *@This()) !void {}
-
         pub fn finish(_: *@This()) !void {}
 
         pub fn deinit(_: *@This()) void {}
+
+        pub fn visitUnreachable(_: *@This()) !void {}
+
+        pub fn visitBackwardLabel(_: *@This(), _: []const wasm.ValType) !struct {
+            pub fn finish(_: *@This()) !Label {
+                return .{};
+            }
+
+            pub fn deinit(_: *@This()) void {}
+
+            pub fn visitArg(_: *@This(), _: Operand) !Operand {
+                return .{};
+            }
+        } {
+            return .{};
+        }
+
+        pub fn declareForwardLabel(_: *@This(), _: []const wasm.ValType) !Label {
+            return .{};
+        }
+
+        pub fn visitForwardLabel(_: *@This(), _: Label) !struct {
+            pub fn finish(_: *@This()) !void {}
+
+            pub fn deinit(_: *@This()) void {}
+
+            pub fn visitArg(_: *@This()) !Operand {
+                return .{};
+            }
+        } {
+            return .{};
+        }
+
+        pub fn visitBr(_: *@This(), _: Label) !struct {
+            pub fn finish(_: *@This()) !void {}
+
+            pub fn deinit(_: *@This()) void {}
+
+            pub fn visitArg(_: *@This(), _: Operand) !void {}
+        } {
+            return .{};
+        }
+
+        pub fn visitBrIf(_: *@This(), _: Label, _: Operand) !struct {
+            pub fn finish(_: *@This()) !void {}
+
+            pub fn deinit(_: *@This()) void {}
+
+            pub fn visitArg(_: *@This(), _: Operand) !void {}
+        } {
+            return .{};
+        }
+
+        pub fn visitBrTable(_: *@This(), _: Operand) !struct {
+            pub fn finish(_: *@This()) !void {}
+
+            pub fn deinit(_: *@This()) void {}
+
+            pub fn visitArgs(_: *@This()) !struct {
+                pub fn finish(_: *@This()) !void {}
+
+                pub fn deinit(_: *@This()) void {}
+
+                pub fn visitArg(_: *@This(), _: Operand) !void {}
+            } {
+                return .{};
+            }
+
+            pub fn visitTargets(_: *@This()) !struct {
+                pub fn finish(_: *@This()) !void {}
+
+                pub fn deinit(_: *@This()) void {}
+
+                pub fn visitTarget(_: *@This(), _: Label) !void {}
+
+                pub fn visitDefaultTarget(_: *@This(), _: Label) !void {}
+            } {
+                return .{};
+            }
+        } {
+            return .{};
+        }
     } {
         return .{};
     }
